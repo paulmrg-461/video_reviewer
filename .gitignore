@@ -1,0 +1,19 @@
+# Python / venv
+.venv/
+__pycache__/
+*.py[cod]
+
+# Pipeline I/O (pesado / generado)
+videos/*.mp4
+output/
+
+# Modelos / cachés
+*.bin
+*.pt
+docs/
+videos/
+.aider.instructions.md
+.aiderignore
+CLAUDE.md
+.opencode.json
+.claude/
