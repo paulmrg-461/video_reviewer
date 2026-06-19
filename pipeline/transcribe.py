@@ -16,13 +16,51 @@ from pathlib import Path
 
 
 def extraer_audio(video: Path, wav: Path) -> None:
-    """ffmpeg: a 16kHz mono PCM (formato óptimo para Whisper)."""
-    cmd = [
-        "ffmpeg", "-y", "-i", str(video),
-        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
-        str(wav),
+    """ffmpeg: a 16kHz mono PCM.
+
+    Prueba 3 estrategias en orden hasta obtener audio usable.
+    Si el codec está muy dañado, acepta audio parcial con advertencia."""
+    def _usable(w: Path) -> bool:
+        return w.exists() and w.stat().st_size >= 16_000
+
+    def _try(cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    strategies = [
+        ["ffmpeg", "-y", "-err_detect", "ignore_err", "-fflags", "+genpts+igndts",
+         "-i", str(video), "-vn",
+         "-af", "aformat=sample_fmts=s16:sample_rates=16000:channel_layouts=mono",
+         "-c:a", "pcm_s16le", "-map_metadata", "-1",
+         "-max_muxing_queue_size", "9999", str(wav)],
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for cmd in strategies:
+        _try(cmd)
+        if _usable(wav):
+            return
+
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
+        tmp_m4a = Path(tmp.name)
+
+    try:
+        _try(["ffmpeg", "-y", "-err_detect", "ignore_err", "-fflags", "+genpts+igndts",
+              "-i", str(video), "-vn",
+              "-c:a", "aac", "-b:a", "256k", "-ac", "2", "-ar", "44100",
+              "-map_metadata", "-1", str(tmp_m4a)])
+        if tmp_m4a.exists() and tmp_m4a.stat().st_size > 1000:
+            _try(["ffmpeg", "-y", "-i", str(tmp_m4a), "-vn",
+                  "-af", "aformat=sample_fmts=s16:sample_rates=16000:channel_layouts=mono",
+                  "-c:a", "pcm_s16le", "-map_metadata", "-1", str(wav)])
+    finally:
+        tmp_m4a.unlink(missing_ok=True)
+
+    if _usable(wav):
+        print(f"  ⚠  audio parcialmente recuperado (codec dañado)")
+        return
+
+    raise RuntimeError(
+        "No se pudo extraer audio. El codec de audio puede estar corrupto o ser incompatible."
+    )
 
 
 def _fmt_ts(segundos: float) -> str:

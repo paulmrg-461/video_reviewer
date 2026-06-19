@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Reviewer</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+<script>
+if (typeof marked !== 'undefined') {
+  marked.setOptions({ breaks: true, gfm: true });
+}
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #222636;
+  --border: #2e3348;
+  --text: #e1e3eb;
+  --text2: #9096a8;
+  --accent: #6c8cff;
+  --accent2: #4b6bef;
+  --green: #4ade80;
+  --yellow: #facc15;
+  --red: #f87171;
+  --radius: 8px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  padding: 8px 16px;
+  transition: all 0.15s;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; }
+
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
+.sidebar-header p { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+.sidebar-actions { padding: 12px 20px; }
+.btn-primary {
+  width: 100%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 10px;
+}
+.btn-primary:hover { background: var(--accent2); }
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+.session-item {
+  padding: 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.session-item:hover { background: var(--surface2); }
+.session-item.active { background: var(--surface2); border: 1px solid var(--accent); }
+.session-item .name { font-size: 14px; font-weight: 500; }
+.session-item .meta { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.session-item .badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+.session-item .delete-btn {
+  background: none;
+  color: var(--text2);
+  padding: 4px 8px;
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.session-item:hover .delete-btn { opacity: 0.6; }
+.session-item .delete-btn:hover { opacity: 1; color: var(--red); }
+
+/* Main */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  font-size: 16px;
+  text-align: center;
+  padding: 40px;
+  line-height: 1.6;
+}
+
+/* Session view */
+.session-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.session-top {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.session-top h2 { font-size: 20px; }
+.session-top .instructions-preview {
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: 6px;
+  max-width: 600px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-video-bar {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  background: var(--bg);
+}
+.add-video-bar .field { display: flex; flex-direction: column; gap: 4px; }
+.add-video-bar label { font-size: 12px; color: var(--text2); font-weight: 500; }
+.add-video-bar input { width: 320px; }
+.add-video-bar .field-small input { width: 200px; }
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  height: 42px;
+}
+.btn-accent:hover { background: var(--accent2); }
+
+/* Video list */
+.video-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.video-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.video-card:hover { border-color: var(--accent); }
+.video-card.selected { border-color: var(--accent); background: var(--surface2); }
+.video-card .status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.queued { background: var(--text2); }
+.status-dot.extracting_audio, .status-dot.transcribing, .status-dot.summarizing {
+  background: var(--yellow); animation: pulse 1s infinite;
+}
+.status-dot.done { background: var(--green); }
+.status-dot.error { background: var(--red); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.video-card .info { flex: 1; min-width: 0; }
+.video-card .info .vname { font-size: 14px; font-weight: 500; }
+.video-card .info .vpath { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-card .info .vstatus { font-size: 11px; margin-top: 2px; }
+.status-text-queued, .status-text-extracting_audio, .status-text-transcribing, .status-text-summarizing { color: var(--yellow); }
+.status-text-done { color: var(--green); }
+.status-text-error { color: var(--red); }
+
+.video-card .actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-sm:hover { border-color: var(--text2); }
+.btn-sm.danger { color: var(--red); }
+.btn-sm.danger:hover { border-color: var(--red); }
+
+/* Detail panel */
+.detail-panel {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 55%;
+  min-width: 500px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  transform: translateX(0);
+  transition: transform 0.2s;
+}
+.detail-panel.hidden { transform: translateX(100%); }
+
+.detail-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.detail-header h3 { font-size: 16px; }
+.btn-close {
+  background: none;
+  color: var(--text2);
+  font-size: 20px;
+  padding: 4px 8px;
+}
+.btn-close:hover { color: var(--text); }
+
+.detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+}
+.detail-tabs button {
+  background: none;
+  color: var(--text2);
+  padding: 10px 16px;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+}
+.detail-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.detail-tabs button:hover { color: var(--text); }
+
+.detail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+.detail-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 2;
+}
+.detail-toolbar .view-toggle {
+  display: flex;
+  gap: 0;
+  margin-right: auto;
+}
+.detail-toolbar .view-toggle button {
+  font-size: 12px;
+  padding: 5px 12px;
+  background: var(--bg);
+  color: var(--text2);
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+.detail-toolbar .view-toggle button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.detail-toolbar .view-toggle button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.detail-toolbar .view-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.detail-toolbar .btn-icon {
+  font-size: 12px;
+  padding: 5px 12px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.detail-toolbar .btn-icon:hover { border-color: var(--text2); }
+.detail-content .md-raw {
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  background: var(--bg);
+  padding: 20px;
+  min-height: 100%;
+}
+.detail-content .md-preview {
+  font-size: 14px;
+  line-height: 1.75;
+  padding: 20px;
+  color: var(--text);
+}
+.detail-content .md-preview h1 { font-size: 20px; margin: 16px 0 10px; color: var(--accent); }
+.detail-content .md-preview h2 { font-size: 17px; margin: 14px 0 8px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.detail-content .md-preview h3 { font-size: 15px; margin: 12px 0 6px; color: var(--text); }
+.detail-content .md-preview p { margin: 8px 0; }
+.detail-content .md-preview ul, .detail-content .md-preview ol { padding-left: 20px; margin: 8px 0; }
+.detail-content .md-preview li { margin: 4px 0; }
+.detail-content .md-preview code {
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+}
+.detail-content .md-preview pre {
+  background: var(--bg);
+  padding: 14px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.detail-content .md-preview pre code { background: none; padding: 0; }
+.detail-content .md-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+}
+.detail-content .md-preview th, .detail-content .md-preview td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 13px;
+}
+.detail-content .md-preview th { background: var(--bg); font-weight: 600; }
+.detail-content .md-preview strong { color: var(--accent); }
+.detail-content .md-preview blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 14px;
+  margin: 10px 0;
+  color: var(--text2);
+}
+.detail-content .loading { color: var(--text2); padding: 20px; }
+.detail-content .empty { color: var(--text2); padding: 20px; font-style: italic; }
+
+.save-section {
+  padding: 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface2);
+}
+.save-section label { font-size: 12px; color: var(--text2); display: block; margin-bottom: 6px; }
+.save-row { display: flex; gap: 8px; }
+.save-row input { flex: 1; }
+.save-row select { width: 180px; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-overlay.hidden { display: none; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 480px;
+  max-width: 90vw;
+}
+.modal h3 { margin-bottom: 16px; }
+.modal .field { margin-bottom: 14px; }
+.modal .field label { font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px; }
+.modal .field input, .modal .field textarea { width: 100%; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.btn-cancel { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-cancel:hover { background: var(--border); }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 14px;
+  z-index: 200;
+  animation: slideUp 0.25s ease;
+}
+.toast.success { border-color: var(--green); }
+.toast.error { border-color: var(--red); }
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.status-dot.small { width: 8px; height: 8px; display: inline-block; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>Video Reviewer</h1>
+    <p>Transcribe · Analiza · Organiza</p>
+  </div>
+  <div class="sidebar-actions">
+    <button class="btn-primary" onclick="openNewSessionModal()">+ Nueva sesión</button>
+  </div>
+  <div class="session-list" id="sessionList"></div>
+</div>
+
+<div class="main" id="mainContent">
+  <div class="empty-state">
+    <div>
+      <p style="font-size:20px;margin-bottom:8px;">Selecciona o crea una sesión</p>
+      <p>Agrupa videos con instrucciones de análisis personalizadas.<br>Procesa en background y revisa los resultados.</p>
+    </div>
+  </div>
+</div>
+
+<div class="detail-panel hidden" id="detailPanel">
+  <div class="detail-header">
+    <h3 id="detailTitle">Video</h3>
+    <button class="btn-close" onclick="closeDetail()">&times;</button>
+  </div>
+  <div class="detail-tabs">
+    <button data-tab="summary" class="active" onclick="switchDetailTab('summary')">Resumen</button>
+    <button data-tab="analysis" onclick="switchDetailTab('analysis')">Análisis</button>
+    <button data-tab="transcript" onclick="switchDetailTab('transcript')">Transcripción</button>
+    <button data-tab="save" onclick="switchDetailTab('save')">Guardar</button>
+  </div>
+  <div class="detail-toolbar" id="detailToolbar" style="display:none;">
+    <div class="view-toggle">
+      <button id="btnViewPreview" class="active" onclick="setViewMode('preview')">Vista</button>
+      <button id="btnViewRaw" onclick="setViewMode('raw')">Código</button>
+    </div>
+    <button class="btn-icon" onclick="copyContent()" title="Copiar al portapapeles">&#x2398; Copiar</button>
+  </div>
+  <div class="detail-content" id="detailContent"></div>
+</div>
+
+<div class="modal-overlay hidden" id="sessionModal">
+  <div class="modal">
+    <h3>Nueva sesión</h3>
+    <div class="field">
+      <label>Nombre *</label>
+      <input id="newSessionName" placeholder="Ej: Revisión Q1, Auditoría seguridad...">
+    </div>
+    <div class="field">
+      <label>Instrucciones de análisis</label>
+      <textarea id="newSessionInstructions" placeholder="Ej: Busca menciones de riesgos de seguridad, incidentes reportados, protocolos de emergencia..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeNewSessionModal()">Cancelar</button>
+      <button class="btn-accent" onclick="createSession()">Crear sesión</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+
+let state = {
+  sessions: [],
+  activeSessionId: null,
+  activeVideoId: null,
+  activeDetailTab: 'summary',
+  viewMode: 'preview',
+  currentDetailText: '',
+};
+
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }
+
+function statusLabel(s) {
+  const map = {
+    queued: 'En cola',
+    extracting_audio: 'Extrayendo audio',
+    transcribing: 'Transcribiendo',
+    summarizing: 'Analizando',
+    done: 'Completado',
+    error: 'Error'
+  };
+  return map[s] || s;
+}
+
+function escapeHtml(t) {
+  const d = document.createElement('div');
+  d.textContent = t;
+  return d.innerHTML;
+}
+
+async function api(url, opts = {}) {
+  const res = await fetch(API + url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Error del servidor');
+  }
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : res.text();
+}
+
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function loadSessions() {
+  try {
+    state.sessions = await api('/sessions');
+    renderSidebar();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderSidebar() {
+  const list = $('#sessionList');
+  if (state.sessions.length === 0) {
+    list.innerHTML = '<div style="padding:20px;color:var(--text2);font-size:13px;text-align:center;">Sin sesiones</div>';
+    return;
+  }
+  list.innerHTML = state.sessions.map(s => {
+    const active = s.id === state.activeSessionId ? ' active' : '';
+    const doneCount = s.videos.filter(v => v.status === 'done').length;
+    const total = s.videos.length;
+    const badge = total > 0
+      ? `<span class="badge status-text-${doneCount === total ? 'done' : 'queued'}">${doneCount}/${total}</span>`
+      : '';
+    return `
+      <div class="session-item${active}" onclick="selectSession('${s.id}')">
+        <div>
+          <div class="name">${escapeHtml(s.name)}</div>
+          <div class="meta">${s.videos.length} videos · ${new Date(s.created_at).toLocaleDateString()}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${badge}
+          <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Eliminar">&times;</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function selectSession(sid) {
+  state.activeSessionId = sid;
+  state.activeVideoId = null;
+  closeDetail();
+  renderSidebar();
+  renderSessionView();
+}
+
+function renderSessionView() {
+  const session = state.sessions.find(s => s.id === state.activeSessionId);
+  if (!session) return;
+
+  const main = $('#mainContent');
+  main.innerHTML = `
+    <div class="session-view">
+      <div class="session-top">
+        <h2>${escapeHtml(session.name)}</h2>
+        ${session.instructions ? `<div class="instructions-preview">📋 ${escapeHtml(session.instructions)}</div>` : ''}
+      </div>
+      <div class="add-video-bar">
+        <div class="field">
+          <label>Rutas de video (una por línea o separadas por coma)</label>
+          <input id="videoPathsInput" placeholder="/ruta/video1.mp4, /otro/video2.mp4">
+        </div>
+        <div class="field field-small">
+          <label>Idioma</label>
+          <select id="videoLanguage">
+            <option value="es">Español</option>
+            <option value="en">English</option>
+            <option value="auto">Auto</option>
+          </select>
+        </div>
+        <button class="btn-accent" onclick="addVideos()">+ Agregar</button>
+      </div>
+      <div class="video-list" id="videoList">
+        ${session.videos.length === 0
+          ? '<div class="empty-state" style="padding:40px;font-size:14px;">Sin videos. Agrega rutas de video para analizar.</div>'
+          : renderVideoCards(session.videos)}
+      </div>
+    </div>`;
+}
+
+function renderVideoCards(videos) {
+  return [...videos].reverse().map(v => {
+    const sel = v.id === state.activeVideoId ? ' selected' : '';
+    return `
+      <div class="video-card${sel}" onclick="selectVideo('${v.id}')">
+        <div class="status-dot ${v.status}"></div>
+        <div class="info">
+          <div class="vname">${escapeHtml(v.name)}</div>
+          <div class="vpath">${escapeHtml(v.original_path)}</div>
+          <div class="vstatus status-text-${v.status}">${statusLabel(v.status)}</div>
+        </div>
+        <div class="actions">
+          ${v.status === 'error' ? `<button class="btn-sm" onclick="event.stopPropagation();retryVideo('${v.id}')">Reintentar</button>` : ''}
+          ${v.status === 'done' ? `<button class="btn-sm" onclick="event.stopPropagation();selectVideo('${v.id}')">Ver</button>` : ''}
+          <button class="btn-sm danger" onclick="event.stopPropagation();deleteVideo('${v.id}')">Eliminar</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function addVideos() {
+  const input = $('#videoPathsInput');
+  const lang = $('#videoLanguage');
+  const raw = input.value;
+  if (!raw.trim()) return;
+
+  const paths = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  try {
+    const res = await api(`/sessions/${state.activeSessionId}/videos`, {
+      method: 'POST',
+      body: JSON.stringify({ paths, language: lang.value }),
+    });
+    input.value = '';
+    await loadSessions();
+    renderSessionView();
+    toast(`${res.added.length} video(s) agregados`);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function retryVideo(vid) {
+  try {
+    await api(`/sessions/${state.activeSessionId}/videos/${vid}/retry`, { method: 'POST' });
+    await loadSessions();
+    renderSessionView();
+    toast('Video reencolado');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function deleteVideo(vid) {
+  if (!confirm('¿Eliminar este video y sus resultados?')) return;
+  try {
+    await api(`/sessions/${state.activeSessionId}/videos/${vid}`, { method: 'DELETE' });
+    if (state.activeVideoId === vid) closeDetail();
+    await loadSessions();
+    renderSessionView();
+    toast('Video eliminado');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function selectVideo(vid) {
+  state.activeVideoId = vid;
+  renderSessionView();
+  openDetail(vid);
+}
+
+async function openDetail(vid) {
+  const panel = $('#detailPanel');
+  panel.classList.remove('hidden');
+
+  const session = state.sessions.find(s => s.id === state.activeSessionId);
+  const video = session?.videos.find(v => v.id === vid);
+  if (!video) return;
+
+  $('#detailTitle').textContent = video.name;
+
+  $$('.detail-tabs button').forEach(b => b.classList.remove('active'));
+  const activeTab = $(`.detail-tabs button[data-tab="${state.activeDetailTab}"]`);
+  if (activeTab) activeTab.classList.add('active');
+  else {
+    state.activeDetailTab = 'summary';
+    $('.detail-tabs button[data-tab="summary"]')?.classList.add('active');
+  }
+
+  await loadDetailContent(state.activeDetailTab);
+}
+
+function closeDetail() {
+  state.activeVideoId = null;
+  state.activeDetailTab = 'summary';
+  $('#detailPanel').classList.add('hidden');
+  renderSessionView();
+}
+
+function switchDetailTab(tab) {
+  state.activeDetailTab = tab;
+  $$('.detail-tabs button').forEach(b => b.classList.remove('active'));
+  $(`.detail-tabs button[data-tab="${tab}"]`)?.classList.add('active');
+  loadDetailContent(tab);
+}
+
+async function loadDetailContent(tab) {
+  const sid = state.activeSessionId;
+  const vid = state.activeVideoId;
+  if (!sid || !vid) return;
+
+  const content = $('#detailContent');
+  const toolbar = $('#detailToolbar');
+
+  if (tab === 'save') {
+    toolbar.style.display = 'none';
+    content.innerHTML = `
+      <div class="save-section" style="border-top:none;background:none;">
+        <div class="field">
+          <label>Directorio destino</label>
+          <div class="save-row">
+            <input id="saveTargetDir" placeholder="/ruta/donde/guardar/">
+            <select id="saveFiles" multiple style="height:42px;width:220px;">
+              <option value="summary.md" selected>Resumen</option>
+              <option value="analysis.md" selected>Análisis</option>
+              <option value="transcript.txt" selected>Transcripción</option>
+              <option value="transcript.srt">SRT</option>
+            </select>
+            <button class="btn-accent" onclick="saveOutput()">Guardar</button>
+          </div>
+        </div>
+        <div id="saveResult" style="margin-top:12px;font-size:13px;"></div>
+      </div>`;
+    return;
+  }
+
+  toolbar.style.display = 'flex';
+  content.innerHTML = '<div class="loading">Cargando...</div>';
+
+  try {
+    const endpoints = {
+      summary: `/sessions/${sid}/videos/${vid}/summary`,
+      analysis: `/sessions/${sid}/videos/${vid}/analysis`,
+      transcript: `/sessions/${sid}/videos/${vid}/transcript`,
+    };
+
+    const ep = endpoints[tab];
+    if (!ep) { content.innerHTML = '<div class="empty">No disponible</div>'; return; }
+
+    const data = await api(ep);
+    if (!data.text || !data.text.trim()) {
+      content.innerHTML = '<div class="empty">Sin contenido aún</div>';
+      return;
+    }
+
+    state.currentDetailText = data.text;
+    renderDetailViews();
+  } catch (e) {
+    toolbar.style.display = 'none';
+    content.innerHTML = `<div class="empty">No disponible: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderDetailViews() {
+  const content = $('#detailContent');
+  const text = state.currentDetailText;
+
+  if (state.viewMode === 'preview') {
+    try {
+      const html = marked.parse(text);
+      content.innerHTML = `<div class="md-preview">${html}</div>`;
+    } catch (e) {
+      content.innerHTML = `<div class="md-raw">${escapeHtml(text)}</div>`;
+    }
+  } else {
+    content.innerHTML = `<div class="md-raw">${escapeHtml(text)}</div>`;
+  }
+}
+
+function setViewMode(mode) {
+  state.viewMode = mode;
+  $('#btnViewPreview').classList.toggle('active', mode === 'preview');
+  $('#btnViewRaw').classList.toggle('active', mode === 'raw');
+  if (state.currentDetailText) {
+    renderDetailViews();
+  }
+}
+
+async function copyContent() {
+  try {
+    await navigator.clipboard.writeText(state.currentDetailText);
+    const btn = document.querySelector('.btn-icon');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '&#x2713; Copiado!';
+    btn.style.color = 'var(--green)';
+    setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 1500);
+  } catch {
+    toast('Error al copiar', 'error');
+  }
+}
+
+async function saveOutput() {
+  const sid = state.activeSessionId;
+  const vid = state.activeVideoId;
+  const targetDir = $('#saveTargetDir').value.trim();
+  const filesSelect = $('#saveFiles');
+  const files = Array.from(filesSelect.selectedOptions).map(o => o.value);
+
+  if (!targetDir) { toast('Ingresa un directorio destino', 'error'); return; }
+
+  try {
+    const res = await api(`/sessions/${sid}/videos/${vid}/save`, {
+      method: 'POST',
+      body: JSON.stringify({ target_dir: targetDir, files }),
+    });
+    $('#saveResult').innerHTML = res.saved.map(f =>
+      `<div style="color:var(--green);margin-bottom:4px;">✓ ${escapeHtml(f)}</div>`
+    ).join('');
+    toast(`${res.saved.length} archivo(s) guardados`);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function openNewSessionModal() {
+  $('#sessionModal').classList.remove('hidden');
+  $('#newSessionName').focus();
+}
+
+function closeNewSessionModal() {
+  $('#sessionModal').classList.add('hidden');
+  $('#newSessionName').value = '';
+  $('#newSessionInstructions').value = '';
+}
+
+async function createSession() {
+  const name = $('#newSessionName').value.trim();
+  if (!name) { toast('El nombre es obligatorio', 'error'); return; }
+  const instructions = $('#newSessionInstructions').value.trim();
+  try {
+    const session = await api('/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name, instructions }),
+    });
+    closeNewSessionModal();
+    await loadSessions();
+    selectSession(session.id);
+    toast('Sesión creada');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function deleteSession(sid) {
+  if (!confirm('¿Eliminar esta sesión y todos sus videos?')) return;
+  try {
+    await api(`/sessions/${sid}`, { method: 'DELETE' });
+    if (state.activeSessionId === sid) {
+      state.activeSessionId = null;
+      state.activeVideoId = null;
+      closeDetail();
+      $('#mainContent').innerHTML = `
+        <div class="empty-state">
+          <div>
+            <p style="font-size:20px;margin-bottom:8px;">Selecciona o crea una sesión</p>
+            <p>Agrupa videos con instrucciones de análisis personalizadas.<br>Procesa en background y revisa los resultados.</p>
+          </div>
+        </div>`;
+    }
+    await loadSessions();
+    toast('Sesión eliminada');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function startSSE() {
+  const es = new EventSource(API + '/progress');
+  es.onmessage = (e) => {
+    try {
+      const sessions = JSON.parse(e.data);
+      state.sessions = sessions;
+      renderSidebar();
+      if (state.activeSessionId) {
+        const session = state.sessions.find(s => s.id === state.activeSessionId);
+        if (session) {
+          const videoList = $('#videoList');
+          if (videoList) {
+            videoList.innerHTML = session.videos.length === 0
+              ? '<div class="empty-state" style="padding:40px;font-size:14px;">Sin videos. Agrega rutas de video para analizar.</div>'
+              : renderVideoCards(session.videos);
+          }
+        }
+      }
+    } catch (ex) {}
+  };
+  es.onerror = () => { es.close(); setTimeout(startSSE, 3000); };
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!$('#sessionModal').classList.contains('hidden')) closeNewSessionModal();
+    else if (!$('#detailPanel').classList.contains('hidden')) closeDetail();
+  }
+});
+
+loadSessions().then(() => {
+  if (state.sessions.length > 0) {
+    selectSession(state.sessions[0].id);
+  }
+});
+startSSE();
+</script>
+</body>
+</html>
