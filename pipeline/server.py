@@ -401,28 +401,18 @@ async def save_output(sid: str, vid: str, req: Request):
     target_path = Path(target)
     target_path.mkdir(parents=True, exist_ok=True)
 
+    video = await store.get_video(sid, vid)
+    prefix = _slug(video["name"]) if video else vid
+
     saved = []
     for fname in files:
         src = out_dir / fname
         if src.exists():
-            dst = target_path / f"{_slug(video_name(sid, vid))}_{fname}"
+            dst = target_path / f"{prefix}_{fname}"
             shutil.copy2(src, dst)
             saved.append(str(dst))
 
     return {"saved": saved}
-
-
-def video_name(sid: str, vid: str) -> str:
-    import asyncio
-    async def _get():
-        v = await store.get_video(sid, vid)
-        return v["name"] if v else vid
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return vid
-    future = asyncio.run_coroutine_threadsafe(_get(), loop)
-    return future.result(timeout=5)
 
 
 @app.get("/api/progress")
