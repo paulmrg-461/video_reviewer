@@ -141,6 +141,14 @@ def _run_transcribe(
     transcribir(video_path, out_dir, whisper_model, device, compute_type, language)
 
 
+def _liberar_ollama(modelo: str) -> None:
+    try:
+        subprocess.run(["ollama", "stop", modelo], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass
+
+
 def _run_summarize(
     out_dir: Path, llm_model: str, nombre: str, instructions: str | None,
 ) -> None:
@@ -189,6 +197,7 @@ async def _process_video(task: dict) -> None:
                                          "msg": "Transcribiendo..."})
 
         loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _liberar_ollama, llm_model)
         await loop.run_in_executor(
             None, _run_transcribe, video_path, out_dir,
             whisper_model, device, compute_type, language,
@@ -203,6 +212,8 @@ async def _process_video(task: dict) -> None:
             None, _run_summarize, out_dir, llm_model,
             video["name"], instructions or None,
         )
+
+        await loop.run_in_executor(None, _liberar_ollama, llm_model)
 
         video["status"] = "done"
         video["output_dir"] = str(out_dir)
