@@ -419,6 +419,7 @@ async def stop_recording(sid: str, rid: str, req: Request):
         "instructions": instructions,
         "language": language,
         "analyze_visual": analyze_visual,
+        "is_recording": True,
         "output_dir": str(ROOT / "sessions" / sid / vid),
         "error": None,
     }
@@ -431,6 +432,27 @@ async def stop_recording(sid: str, rid: str, req: Request):
         "analyze_visual": analyze_visual,
     })
     return {"video": video}
+
+
+@app.delete("/api/sessions/{sid}/videos/{vid}/recording")
+async def delete_recording_file(sid: str, vid: str):
+    video = await store.get_video(sid, vid)
+    if not video:
+        raise HTTPException(404, "Video no encontrado")
+    if not video.get("is_recording"):
+        raise HTTPException(400, "Este video no es una grabación gestionada por la app")
+
+    path = Path(video["original_path"])
+    sessions_root = (ROOT / "sessions").resolve()
+    resolved = path.resolve() if path.exists() else path
+    if sessions_root not in resolved.parents:
+        raise HTTPException(400, "Ruta fuera del directorio de grabaciones")
+
+    if path.exists():
+        path.unlink()
+    video["original_deleted"] = True
+    await store.update_video(sid, video)
+    return {"ok": True}
 
 
 @app.get("/api/record/status")

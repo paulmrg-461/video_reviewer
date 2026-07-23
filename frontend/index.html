@@ -544,6 +544,7 @@ let state = {
   currentDetailText: '',
   recording: null,
   recordingTimerId: null,
+  recordingPrompted: new Set(),
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -697,7 +698,7 @@ function renderVideoCards(videos) {
         <div class="status-dot ${v.status}"></div>
         <div class="info">
           <div class="vname">${escapeHtml(v.name)}${v.analyze_visual ? ' 🖥️' : ''}</div>
-          <div class="vpath">${escapeHtml(v.original_path)}</div>
+          <div class="vpath">${v.original_deleted ? '🗑️ grabación mp4 eliminada (análisis conservado)' : escapeHtml(v.original_path)}</div>
           <div class="vstatus status-text-${v.status}">${statusLabel(v.status)}</div>
         </div>
         <div class="actions">
@@ -1043,6 +1044,35 @@ async function stopRecording() {
   }
 }
 
+function checkRecordingCleanup() {
+  for (const s of state.sessions) {
+    for (const v of s.videos) {
+      if (v.is_recording && v.status === 'done' && !v.original_deleted
+          && !state.recordingPrompted.has(v.id)) {
+        state.recordingPrompted.add(v.id);
+        promptDeleteRecording(s.id, v);
+      }
+    }
+  }
+}
+
+async function promptDeleteRecording(sid, video) {
+  const del = confirm(
+    `Análisis de "${video.name}" completo.\n\n` +
+    `¿Eliminar el archivo de grabación (mp4) para liberar espacio?\n` +
+    `El resumen, análisis y transcripción se conservan.`
+  );
+  if (!del) return;
+  try {
+    await api(`/sessions/${sid}/videos/${video.id}/recording`, { method: 'DELETE' });
+    toast('Grabación mp4 eliminada, análisis conservado');
+    await loadSessions();
+    if (state.activeSessionId === sid) renderSessionView();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 function startSSE() {
   const es = new EventSource(API + '/progress');
   es.onmessage = (e) => {
@@ -1050,6 +1080,7 @@ function startSSE() {
       const sessions = JSON.parse(e.data);
       state.sessions = sessions;
       renderSidebar();
+      checkRecordingCleanup();
       if (state.activeSessionId) {
         const session = state.sessions.find(s => s.id === state.activeSessionId);
         if (session) {
