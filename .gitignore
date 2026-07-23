@@ -6,6 +6,8 @@ __pycache__/
 # Pipeline I/O (pesado / generado)
 videos/*.mp4
 output/
+sessions/
+sessions.json
 
 # Modelos / cachés
 *.bin
