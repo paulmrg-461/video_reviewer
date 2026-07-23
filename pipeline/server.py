@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -34,6 +35,13 @@ FRONTEND_DIR = ROOT / "frontend"
 VIDEOS_DIR_DEFAULT = ROOT / "videos"
 
 OLLAMA_URL = "http://localhost:11434"
+
+DEFAULT_RECORD_INSTRUCTIONS = (
+    "Analiza la grabación a detalle. A partir de la transcripción de audio (y las notas de "
+    "pantalla si existen), genera un resumen ejecutivo, un análisis exhaustivo y una lista "
+    "clara de puntos clave, decisiones tomadas y pendientes. No omitas información relevante, "
+    "sé preciso con cifras, nombres y fechas."
+)
 
 
 def _slug(nombre: str) -> str:
@@ -122,6 +130,7 @@ app = FastAPI(title="Video Reviewer", version="1.0.0")
 processing_queue: asyncio.Queue[dict] = asyncio.Queue()
 progress_events: dict[str, asyncio.Event] = {}
 progress_data: dict[str, dict] = {}
+active_recordings: dict[str, dict] = {}
 
 
 async def _emit_progress(sid: str, vid: str, data: dict) -> None:
@@ -154,6 +163,21 @@ def _run_summarize(
 ) -> None:
     from summarize import resumir
     resumir(out_dir, llm_model, nombre, instructions)
+
+
+def _run_visual(video_path: Path, out_dir: Path, vision_model: str, intervalo: int) -> None:
+    from visual import analizar_visual
+    analizar_visual(video_path, out_dir, vision_model, intervalo)
+
+
+def _record_start(output: Path) -> subprocess.Popen:
+    from recorder import iniciar
+    return iniciar(output)
+
+
+def _record_stop(proc: subprocess.Popen) -> bool:
+    from recorder import detener
+    return detener(proc)
 
 
 async def _process_video(task: dict) -> None:
@@ -190,6 +214,9 @@ async def _process_video(task: dict) -> None:
         device = task.get("device", "cuda")
         compute_type = task.get("compute_type", "int8_float16")
         llm_model = task.get("llm_model", "qwen2.5:14b")
+        vision_model = task.get("vision_model", "gemma4:e4b")
+        frame_interval = task.get("frame_interval") or int(os.environ.get("VISUAL_FRAME_INTERVAL_SEG", "15"))
+        analyze_visual = bool(video.get("analyze_visual") or task.get("analyze_visual"))
 
         video["status"] = "transcribing"
         await store.update_video(sid, video)
@@ -202,6 +229,17 @@ async def _process_video(task: dict) -> None:
             None, _run_transcribe, video_path, out_dir,
             whisper_model, device, compute_type, language,
         )
+
+        if analyze_visual:
+            video["status"] = "analyzing_visual"
+            await store.update_video(sid, video)
+            await _emit_progress(sid, vid, {"status": "analyzing_visual",
+                                             "msg": "Analizando pantalla..."})
+            await loop.run_in_executor(None, _liberar_ollama, llm_model)
+            await loop.run_in_executor(
+                None, _run_visual, video_path, out_dir, vision_model, frame_interval,
+            )
+            await loop.run_in_executor(None, _liberar_ollama, vision_model)
 
         video["status"] = "summarizing"
         await store.update_video(sid, video)
@@ -290,6 +328,7 @@ async def add_video(sid: str, req: Request):
         paths = [paths]
     instructions = body.get("instructions", "")
     language = body.get("language", "es")
+    analyze_visual = bool(body.get("analyze_visual", False))
 
     added = []
     for p in paths:
@@ -307,6 +346,7 @@ async def add_video(sid: str, req: Request):
             "status": "queued",
             "instructions": instructions.strip() or session.get("instructions", ""),
             "language": language,
+            "analyze_visual": analyze_visual,
             "output_dir": str(ROOT / "sessions" / sid / vid),
             "error": None,
         }
@@ -316,10 +356,89 @@ async def add_video(sid: str, req: Request):
             "video_id": vid,
             "instructions": video["instructions"],
             "language": language,
+            "analyze_visual": analyze_visual,
         })
         added.append(video)
 
     return {"added": added}
+
+
+@app.post("/api/sessions/{sid}/record/start")
+async def start_recording(sid: str):
+    session = await store.get_session(sid)
+    if not session:
+        raise HTTPException(404, "Sesión no encontrada")
+
+    rid = uuid.uuid4().hex[:12]
+    output = ROOT / "sessions" / sid / f"rec_{rid}.mp4"
+    try:
+        proc = _record_start(output)
+    except FileNotFoundError:
+        raise HTTPException(500, "gpu-screen-recorder no está instalado")
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    active_recordings[rid] = {
+        "session_id": sid, "proc": proc, "output": output, "started_at": started_at,
+    }
+    return {"recording_id": rid, "started_at": started_at}
+
+
+@app.post("/api/sessions/{sid}/record/{rid}/stop")
+async def stop_recording(sid: str, rid: str, req: Request):
+    rec = active_recordings.get(rid)
+    if not rec or rec["session_id"] != sid:
+        raise HTTPException(404, "Grabación no encontrada")
+
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    language = body.get("language", "es")
+    analyze_visual = bool(body.get("analyze_visual", True))
+
+    loop = asyncio.get_running_loop()
+    ok = await loop.run_in_executor(None, _record_stop, rec["proc"])
+    del active_recordings[rid]
+
+    output = rec["output"]
+    if not ok or not output.exists() or output.stat().st_size == 0:
+        raise HTTPException(500, "La grabación no se guardó correctamente")
+
+    session = await store.get_session(sid)
+    instructions = (
+        body.get("instructions", "").strip()
+        or (session.get("instructions", "").strip() if session else "")
+        or DEFAULT_RECORD_INSTRUCTIONS
+    )
+    vid = uuid.uuid4().hex[:12]
+    video = {
+        "id": vid,
+        "name": output.name,
+        "original_path": str(output),
+        "status": "queued",
+        "instructions": instructions,
+        "language": language,
+        "analyze_visual": analyze_visual,
+        "output_dir": str(ROOT / "sessions" / sid / vid),
+        "error": None,
+    }
+    await store.update_video(sid, video)
+    await processing_queue.put({
+        "session_id": sid,
+        "video_id": vid,
+        "instructions": video["instructions"],
+        "language": language,
+        "analyze_visual": analyze_visual,
+    })
+    return {"video": video}
+
+
+@app.get("/api/record/status")
+async def recording_status():
+    return {
+        rid: {"session_id": r["session_id"], "started_at": r["started_at"]}
+        for rid, r in active_recordings.items()
+    }
 
 
 @app.post("/api/sessions/{sid}/videos/{vid}/retry")
@@ -342,6 +461,7 @@ async def retry_video(sid: str, vid: str):
         "video_id": vid,
         "instructions": video.get("instructions", ""),
         "language": video.get("language", "es"),
+        "analyze_visual": video.get("analyze_visual", False),
     })
     return {"ok": True}
 
@@ -370,6 +490,15 @@ async def get_transcript(sid: str, vid: str):
     if not txt.exists():
         raise HTTPException(404, "Transcripción no disponible")
     return {"text": txt.read_text(encoding="utf-8")}
+
+
+@app.get("/api/sessions/{sid}/videos/{vid}/visual")
+async def get_visual_notes(sid: str, vid: str):
+    out_dir = ROOT / "sessions" / sid / vid
+    notes = out_dir / "visual_notes.md"
+    if not notes.exists():
+        raise HTTPException(404, "Notas visuales no disponibles")
+    return {"text": notes.read_text(encoding="utf-8")}
 
 
 @app.get("/api/sessions/{sid}/videos/{vid}/srt")

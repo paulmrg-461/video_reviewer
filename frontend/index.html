@@ -212,7 +212,7 @@ textarea { resize: vertical; min-height: 80px; }
   flex-shrink: 0;
 }
 .status-dot.queued { background: var(--text2); }
-.status-dot.extracting_audio, .status-dot.transcribing, .status-dot.summarizing {
+.status-dot.extracting_audio, .status-dot.transcribing, .status-dot.summarizing, .status-dot.analyzing_visual {
   background: var(--yellow); animation: pulse 1s infinite;
 }
 .status-dot.done { background: var(--green); }
@@ -223,7 +223,26 @@ textarea { resize: vertical; min-height: 80px; }
 .video-card .info .vname { font-size: 14px; font-weight: 500; }
 .video-card .info .vpath { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-card .info .vstatus { font-size: 11px; margin-top: 2px; }
-.status-text-queued, .status-text-extracting_audio, .status-text-transcribing, .status-text-summarizing { color: var(--yellow); }
+.status-text-queued, .status-text-extracting_audio, .status-text-transcribing, .status-text-summarizing, .status-text-analyzing_visual { color: var(--yellow); }
+.btn-record {
+  background: var(--surface2);
+  color: var(--red);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-record:hover { border-color: var(--red); }
+.btn-record.active {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red);
+}
+.recording-timer {
+  color: var(--red);
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
 .status-text-done { color: var(--green); }
 .status-text-error { color: var(--red); }
 
@@ -482,6 +501,7 @@ textarea { resize: vertical; min-height: 80px; }
     <button data-tab="summary" class="active" onclick="switchDetailTab('summary')">Resumen</button>
     <button data-tab="analysis" onclick="switchDetailTab('analysis')">Análisis</button>
     <button data-tab="transcript" onclick="switchDetailTab('transcript')">Transcripción</button>
+    <button data-tab="visual" onclick="switchDetailTab('visual')">Pantalla</button>
     <button data-tab="save" onclick="switchDetailTab('save')">Guardar</button>
   </div>
   <div class="detail-toolbar" id="detailToolbar" style="display:none;">
@@ -522,6 +542,8 @@ let state = {
   activeDetailTab: 'summary',
   viewMode: 'preview',
   currentDetailText: '',
+  recording: null,
+  recordingTimerId: null,
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -532,6 +554,7 @@ function statusLabel(s) {
     queued: 'En cola',
     extracting_audio: 'Extrayendo audio',
     transcribing: 'Transcribiendo',
+    analyzing_visual: 'Analizando pantalla',
     summarizing: 'Analizando',
     done: 'Completado',
     error: 'Error'
@@ -607,6 +630,7 @@ async function selectSession(sid) {
   state.activeVideoId = null;
   closeDetail();
   renderSidebar();
+  await checkActiveRecording(sid);
   renderSessionView();
 }
 
@@ -614,12 +638,25 @@ function renderSessionView() {
   const session = state.sessions.find(s => s.id === state.activeSessionId);
   if (!session) return;
 
+  const recording = state.recording && state.recording.sid === session.id ? state.recording : null;
+  const elapsed = recording ? fmtElapsed(Math.floor((Date.now() - recording.startedAt.getTime()) / 1000)) : '';
+
   const main = $('#mainContent');
   main.innerHTML = `
     <div class="session-view">
       <div class="session-top">
-        <h2>${escapeHtml(session.name)}</h2>
-        ${session.instructions ? `<div class="instructions-preview">📋 ${escapeHtml(session.instructions)}</div>` : ''}
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+          <div>
+            <h2>${escapeHtml(session.name)}</h2>
+            ${session.instructions ? `<div class="instructions-preview">📋 ${escapeHtml(session.instructions)}</div>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+            ${recording ? `<span class="recording-timer" id="recordingTimer">${elapsed}</span>` : ''}
+            <button class="btn-sm btn-record${recording ? ' active' : ''}" onclick="toggleRecording()">
+              ${recording ? '⏹ Detener grabación' : '🔴 Grabar pantalla+audio'}
+            </button>
+          </div>
+        </div>
       </div>
       <div class="add-video-bar">
         <div class="field">
@@ -634,6 +671,12 @@ function renderSessionView() {
             <option value="auto">Auto</option>
           </select>
         </div>
+        <div class="field field-small">
+          <label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;height:42px;">
+            <input type="checkbox" id="videoAnalyzeVisual" style="width:auto;"> Análisis visual
+          </label>
+        </div>
         <button class="btn-accent" onclick="addVideos()">+ Agregar</button>
       </div>
       <div class="video-list" id="videoList">
@@ -642,6 +685,8 @@ function renderSessionView() {
           : renderVideoCards(session.videos)}
       </div>
     </div>`;
+
+  if (recording) startRecordingTimer();
 }
 
 function renderVideoCards(videos) {
@@ -651,7 +696,7 @@ function renderVideoCards(videos) {
       <div class="video-card${sel}" onclick="selectVideo('${v.id}')">
         <div class="status-dot ${v.status}"></div>
         <div class="info">
-          <div class="vname">${escapeHtml(v.name)}</div>
+          <div class="vname">${escapeHtml(v.name)}${v.analyze_visual ? ' 🖥️' : ''}</div>
           <div class="vpath">${escapeHtml(v.original_path)}</div>
           <div class="vstatus status-text-${v.status}">${statusLabel(v.status)}</div>
         </div>
@@ -671,10 +716,11 @@ async function addVideos() {
   if (!raw.trim()) return;
 
   const paths = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  const analyzeVisual = $('#videoAnalyzeVisual')?.checked || false;
   try {
     const res = await api(`/sessions/${state.activeSessionId}/videos`, {
       method: 'POST',
-      body: JSON.stringify({ paths, language: lang.value }),
+      body: JSON.stringify({ paths, language: lang.value, analyze_visual: analyzeVisual }),
     });
     input.value = '';
     await loadSessions();
@@ -788,6 +834,7 @@ async function loadDetailContent(tab) {
       summary: `/sessions/${sid}/videos/${vid}/summary`,
       analysis: `/sessions/${sid}/videos/${vid}/analysis`,
       transcript: `/sessions/${sid}/videos/${vid}/transcript`,
+      visual: `/sessions/${sid}/videos/${vid}/visual`,
     };
 
     const ep = endpoints[tab];
@@ -915,6 +962,82 @@ async function deleteSession(sid) {
     }
     await loadSessions();
     toast('Sesión eliminada');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function fmtElapsed(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function startRecordingTimer() {
+  stopRecordingTimer();
+  state.recordingTimerId = setInterval(() => {
+    const el = $('#recordingTimer');
+    if (!el || !state.recording) return;
+    el.textContent = fmtElapsed(Math.floor((Date.now() - state.recording.startedAt.getTime()) / 1000));
+  }, 1000);
+}
+
+function stopRecordingTimer() {
+  if (state.recordingTimerId) { clearInterval(state.recordingTimerId); state.recordingTimerId = null; }
+}
+
+async function checkActiveRecording(sid) {
+  try {
+    const status = await api('/record/status');
+    const entry = Object.entries(status).find(([, r]) => r.session_id === sid);
+    if (entry) {
+      const [rid, r] = entry;
+      state.recording = { sid, rid, startedAt: new Date(r.started_at) };
+    } else if (state.recording && state.recording.sid === sid) {
+      state.recording = null;
+      stopRecordingTimer();
+    }
+  } catch (e) { /* servidor sin este endpoint aún, ignorar */ }
+}
+
+async function toggleRecording() {
+  if (state.recording && state.recording.sid === state.activeSessionId) {
+    await stopRecording();
+  } else {
+    await startRecording();
+  }
+}
+
+async function startRecording() {
+  const sid = state.activeSessionId;
+  if (!sid) return;
+  try {
+    const res = await api(`/sessions/${sid}/record/start`, { method: 'POST' });
+    state.recording = { sid, rid: res.recording_id, startedAt: new Date(res.started_at) };
+    renderSessionView();
+    toast('Grabando — elige pantalla/ventana en el diálogo del sistema');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function stopRecording() {
+  const sid = state.recording?.sid;
+  const rid = state.recording?.rid;
+  if (!sid || !rid) return;
+  try {
+    toast('Finalizando grabación...');
+    await api(`/sessions/${sid}/record/${rid}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ analyze_visual: true }),
+    });
+    stopRecordingTimer();
+    state.recording = null;
+    await loadSessions();
+    renderSessionView();
+    toast('Grabación agregada, procesando en background');
   } catch (e) {
     toast(e.message, 'error');
   }

@@ -126,6 +126,23 @@ def _build_prompts(instructions: str | None, nombre: str):
     return sys_map, prompt_map, prompt_reduce_summary, prompt_reduce_analysis
 
 
+def _build_visual_map_prompt(instructions: str | None) -> str:
+    if instructions:
+        return (
+            f"Estas son notas de descripciones de pantalla (capturas cada pocos segundos) de "
+            f"una grabación. Extrae SOLO lo relacionado con: {instructions}\n\n"
+            f"Usa viñetas cortas. Conserva las referencias de tiempo [HH:MM:SS].\n\n"
+            f"--- NOTAS DE PANTALLA ---\n{{chunk}}\n--- FIN NOTAS DE PANTALLA ---"
+        )
+    return (
+        "Estas son notas de descripciones de pantalla (capturas cada pocos segundos) de una "
+        "grabación. Extrae en viñetas cortas los elementos relevantes: aplicaciones usadas, "
+        "texto o datos visibles, cambios importantes de contenido. Conserva las referencias "
+        "de tiempo [HH:MM:SS].\n\n"
+        "--- NOTAS DE PANTALLA ---\n{chunk}\n--- FIN NOTAS DE PANTALLA ---"
+    )
+
+
 def _ollama_chat(model: str, system: str, user: str, num_ctx: int = 8192) -> str:
     payload = {
         "model": model,
@@ -182,20 +199,42 @@ def resumir(out_dir: Path, model: str, nombre: str,
         notas.append(f"### Fragmento {i}\n{nota}")
     notas_join = "\n\n".join(notas)
 
+    visual_path = out_dir / "visual_notes.md"
+    notas_visuales_join = ""
+    if visual_path.exists():
+        visual_texto = visual_path.read_text(encoding="utf-8")
+        if visual_texto.strip():
+            trozos_v = list(_trozos(visual_texto, PALABRAS_POR_TROZO, SOLAPE))
+            print(f"  {len(visual_texto.split())} palabras visuales -> {len(trozos_v)} trozos (MAP visual)")
+            map_prompt_visual = _build_visual_map_prompt(instructions)
+            notas_visuales = []
+            for i, ch in enumerate(trozos_v, 1):
+                print(f"    MAP visual trozo {i}/{len(trozos_v)}")
+                nota = _ollama_chat(model, sys_map, map_prompt_visual.format(chunk=ch))
+                notas_visuales.append(f"### Fragmento visual {i}\n{nota}")
+            notas_visuales_join = "\n\n".join(notas_visuales)
+
+    reduce_summary_user = prompt_reduce_summary.format(notas=notas_join, nombre=nombre)
+    reduce_analysis_user = prompt_reduce_analysis.format(notas=notas_join, nombre=nombre)
+
+    if notas_visuales_join:
+        extra = (
+            "\n\n--- NOTAS DE PANTALLA (video, MAP ya aplicado) ---\n"
+            f"{notas_visuales_join}\n"
+            "--- FIN NOTAS DE PANTALLA ---\n\n"
+            "Con esta información adicional de pantalla, agrega también una sección "
+            "'## Lo mostrado en pantalla' con hallazgos visuales relevantes, y una sección "
+            "final '## Síntesis' que conecte lo dicho (audio) con lo mostrado en pantalla."
+        )
+        reduce_summary_user += extra
+        reduce_analysis_user += extra
+
     print("  REDUCE -> summary.md")
-    summary = _ollama_chat(
-        model, sys_map,
-        prompt_reduce_summary.format(notas=notas_join, nombre=nombre),
-        num_ctx=16384,
-    )
+    summary = _ollama_chat(model, sys_map, reduce_summary_user, num_ctx=16384)
     summary_path.write_text(summary + "\n", encoding="utf-8")
 
     print("  REDUCE -> analysis.md")
-    analysis = _ollama_chat(
-        model, sys_map,
-        prompt_reduce_analysis.format(notas=notas_join, nombre=nombre),
-        num_ctx=16384,
-    )
+    analysis = _ollama_chat(model, sys_map, reduce_analysis_user, num_ctx=16384)
     analysis_path.write_text(analysis + "\n", encoding="utf-8")
     print(f"  ✓ summary.md + analysis.md")
 
