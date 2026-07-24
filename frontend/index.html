@@ -101,27 +101,34 @@ textarea { resize: vertical; min-height: 80px; }
 
 .session-search {
   padding: 0 20px 12px;
-  position: relative;
 }
-.session-search input {
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-box input {
   width: 100%;
   padding: 9px 32px 9px 34px;
   font-size: 13px;
 }
-.session-search .icon {
+.search-box .icon {
   position: absolute;
-  left: 32px;
-  top: 50%;
-  transform: translateY(-50%);
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text2);
   font-size: 13px;
+  line-height: 1;
   pointer-events: none;
 }
-.session-search .clear-btn {
+.search-box .clear-btn {
   position: absolute;
-  right: 28px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   color: var(--text2);
   padding: 2px 6px;
@@ -129,8 +136,8 @@ textarea { resize: vertical; min-height: 80px; }
   line-height: 1;
   display: none;
 }
-.session-search .clear-btn:hover { color: var(--text); }
-.session-search.has-query .clear-btn { display: block; }
+.search-box .clear-btn:hover { color: var(--text); }
+.session-search.has-query .clear-btn { display: flex; }
 
 .session-list {
   flex: 1;
@@ -538,9 +545,11 @@ textarea { resize: vertical; min-height: 80px; }
     <button class="btn-primary" onclick="openNewSessionModal()">+ Nueva sesión</button>
   </div>
   <div class="session-search" id="sessionSearchWrap">
-    <span class="icon">&#128269;</span>
-    <input id="sessionSearchInput" placeholder="Buscar sesiones..." oninput="onSessionSearch(this.value)">
-    <button class="clear-btn" onclick="clearSessionSearch()" title="Limpiar">&times;</button>
+    <div class="search-box">
+      <span class="icon">&#128269;</span>
+      <input id="sessionSearchInput" placeholder="Buscar sesiones..." oninput="onSessionSearch(this.value)">
+      <button class="clear-btn" onclick="clearSessionSearch()" title="Limpiar">&times;</button>
+    </div>
   </div>
   <div class="session-list" id="sessionList"></div>
 </div>
