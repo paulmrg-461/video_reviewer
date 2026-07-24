@@ -144,6 +144,7 @@ class ProcessVideoUseCase:
                 transcript = _read_transcript_from_disk(out_dir)
             video.mark_transcribed(transcript)
 
+            visual_notes = None
             if analyze_visual:
                 video.start_visual_analysis()
                 await self._video_repo.update(video)
@@ -174,8 +175,8 @@ class ProcessVideoUseCase:
                 self._summarize_use_case.execute,
                 out_dir,
                 llm_model,
-                video.transcript,
-                video.visual_notes,
+                transcript,
+                visual_notes,
                 video.name,
                 instructions or None,
             )
