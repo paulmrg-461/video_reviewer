@@ -13,162 +13,87 @@ Salida:
 
 Uso:
   python summarize.py <out_dir> [--model qwen2.5:14b] [--instructions "..."]
+
+Nota de arquitectura (Step 5 de la migración hexagonal): este módulo es un
+shim delgado. La lógica real vive en:
+  - pipeline.infrastructure.ollama.ollama_client.OllamaClient
+  - pipeline.infrastructure.summarization.prompt_templates
+  - pipeline.infrastructure.summarization.ollama_summarization_provider.OllamaSummarizationProvider
+  - pipeline.application.summarization.summarize_video.SummarizeVideoUseCase
+`resumir()` conserva exactamente la misma firma y comportamiento de cara a
+`server.py` y `run_all.py` (ambos siguen haciendo `from summarize import
+resumir` sin ningún cambio). Como esos call sites solo pasan `out_dir` (no
+objetos `Transcript`/`VisualNotes` ya en memoria), este shim reconstruye esos
+objetos de dominio a partir de `transcript.txt`/`visual_notes.md` en disco —
+ver `_read_transcript`/`_read_visual_notes` — de forma que
+`transcript.plain_text()`/`visual_notes.to_markdown()` reproducen el
+contenido original byte a byte, para que `OllamaSummarizationProvider`
+trocee exactamente el mismo texto que la versión original basada en
+archivos.
 """
 import argparse
-import json
 import sys
-import urllib.request
 from pathlib import Path
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-PALABRAS_POR_TROZO = 3500
-SOLAPE = 200
+# See transcribe.py for why this is needed (same lazy-import/cwd situation).
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-SYS_DEFAULT = (
-    "Eres un analista profesional. Revisas transcripciones de video y extraes "
-    "información relevante con precisión. No inventas. Conservas nombres, cifras, "
-    "fechas y datos exactos. Respondes en español."
+from pipeline.application.summarization.summarize_video import SummarizeVideoUseCase
+from pipeline.domain.videos.transcript import Segment, Transcript
+from pipeline.domain.videos.visual_note import VisualNote, VisualNotes
+from pipeline.infrastructure.ollama.ollama_client import OllamaClient
+from pipeline.infrastructure.summarization.ollama_summarization_provider import (
+    OllamaSummarizationProvider,
 )
 
 
-def _build_prompts(instructions: str | None, nombre: str):
-    if instructions:
-        sys_map = (
-            f"Eres un analista profesional. Tu tarea es analizar transcripciones de video "
-            f"buscando específicamente lo siguiente: {instructions}. "
-            f"Sé preciso, no inventes. Conserva nombres, cifras, fechas y datos exactos. "
-            f"Responde en español."
-        )
-        prompt_map = (
-            f"Este es un FRAGMENTO de la transcripción. Extrae SOLO información "
-            f"relacionada con estas instrucciones: {instructions}\n\n"
-            f"Organiza tus notas bajo estos encabezados (omite los vacíos):\n\n"
-            f"HALLAZGOS: información relevante encontrada según las instrucciones.\n"
-            f"CITAS: frases textuales importantes.\n"
-            f"TEMAS: temas o tópicos mencionados.\n"
-            f"DECISIONES: acuerdos o conclusiones.\n"
-            f"PENDIENTES: preguntas abiertas o cosas por definir.\n\n"
-            f"No resumas en prosa; usa viñetas cortas. Conserva los datos exactos.\n\n"
-            f"--- FRAGMENTO ---\n"
-            f"{{chunk}}\n"
-            f"--- FIN FRAGMENTO ---"
-        )
-        prompt_reduce_summary = (
-            f"NOTAS extraídas de todos los fragmentos de UNA transcripción, analizadas "
-            f"bajo estas instrucciones: {instructions}\n\n"
-            f"Redacta un RESUMEN EJECUTIVO en markdown:\n\n"
-            f"# Resumen — {nombre}\n\n"
-            f"## Tema principal\n(2-3 frases)\n\n"
-            f"## Hallazgos clave según instrucciones\n(viñetas)\n\n"
-            f"## Decisiones / Conclusiones\n(viñetas)\n\n"
-            f"## Pendientes\n(viñetas)\n\n"
-            f"Sé fiel a las notas, no inventes.\n\n"
-            f"--- NOTAS ---\n"
-            f"{{notas}}\n"
-            f"--- FIN NOTAS ---"
-        )
-        prompt_reduce_analysis = (
-            f"NOTAS extraídas de todos los fragmentos de UNA transcripción, analizadas "
-            f"bajo estas instrucciones: {instructions}\n\n"
-            f"Genera un ANÁLISIS DETALLADO en markdown:\n\n"
-            f"# Análisis — {nombre}\n\n"
-            f"## Instrucciones de análisis\n{instructions}\n\n"
-            f"## Hallazgos detallados\nOrganiza por tema o categoría. Incluye citas textuales "
-            f"cuando aplique. Sé exhaustivo.\n\n"
-            f"## Temas identificados\n(lista de temas/tópicos encontrados)\n\n"
-            f"## Conclusiones y recomendaciones\n(viñetas)\n\n"
-            f"Fusiona duplicados. No inventes información que no esté en las notas.\n\n"
-            f"--- NOTAS ---\n"
-            f"{{notas}}\n"
-            f"--- FIN NOTAS ---"
-        )
+def _read_transcript(txt_path: Path) -> Transcript:
+    """Rebuilds a `Transcript` whose `.plain_text()` reproduces `txt_path`'s
+    content byte-for-byte. `Transcript.plain_text()` is `"\\n".join(seg.text
+    for seg in segments) + "\\n"` — a *free-form* join, so a single `Segment`
+    whose `text` is the file's content minus its single trailing "\\n"
+    round-trips exactly, regardless of how many original whisper segments
+    it contains (their per-segment boundaries aren't needed downstream —
+    only the joined text is chunked by `_trozos()`)."""
+    content = txt_path.read_text(encoding="utf-8")
+    text = content[:-1] if content.endswith("\n") else content
+    return Transcript(segments=(Segment(start=0.0, end=0.0, text=text),), language="")
+
+
+def _read_visual_notes(visual_path: Path) -> VisualNotes | None:
+    """Rebuilds a `VisualNotes` whose `.to_markdown()` reproduces
+    `visual_path`'s content byte-for-byte, or `None` if the file doesn't
+    exist or is blank (matching `resumir()`'s original
+    `if visual_texto.strip():` gate).
+
+    Unlike `Transcript.plain_text()`, `VisualNotes.to_markdown()` always
+    prepends `"### [HH:MM:SS]\\n"` to each note, so a single-note wrap isn't
+    generally invertible — *except* that `analizar_visual()` always numbers
+    frames starting at index 0, so the very first note's timestamp is
+    always `00:00:00`. That invariant lets a single `VisualNote` round-trip
+    the whole file: strip the guaranteed `"### [00:00:00]\\n"` prefix and
+    use the remainder (minus its own trailing "\\n") as that note's
+    description.
+    """
+    if not visual_path.exists():
+        return None
+    content = visual_path.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+
+    prefix = "### [00:00:00]\n"
+    if content.startswith(prefix):
+        description = content[len(prefix):]
+        description = description[:-1] if description.endswith("\n") else description
     else:
-        sys_map = SYS_DEFAULT
-        prompt_map = (
-            "Este es un FRAGMENTO de la transcripción. Extrae información relevante "
-            "en notas concisas bajo estos encabezados (omite los vacíos):\n\n"
-            "TEMAS: temas o tópicos principales discutidos.\n"
-            "PUNTOS CLAVE: información importante, datos, cifras.\n"
-            "DECISIONES: acuerdos o conclusiones.\n"
-            "ACCIONES: tareas o siguientes pasos mencionados.\n"
-            "PENDIENTES: preguntas abiertas o cosas por definir.\n\n"
-            "No resumas en prosa; usa viñetas cortas. Conserva los datos exactos.\n\n"
-            "--- FRAGMENTO ---\n"
-            "{chunk}\n"
-            "--- FIN FRAGMENTO ---"
-        )
-        prompt_reduce_summary = (
-            "NOTAS extraídas de todos los fragmentos de UNA transcripción. "
-            "Redacta un RESUMEN EJECUTIVO en markdown:\n\n"
-            f"# Resumen — {{nombre}}\n\n"
-            "## Tema principal\n(2-3 frases)\n\n"
-            "## Puntos clave\n(viñetas)\n\n"
-            "## Decisiones / Conclusiones\n(viñetas)\n\n"
-            "## Pendientes\n(viñetas)\n\n"
-            "Sé fiel a las notas, no inventes.\n\n"
-            "--- NOTAS ---\n"
-            "{notas}\n"
-            "--- FIN NOTAS ---"
-        )
-        prompt_reduce_analysis = (
-            "NOTAS extraídas de todos los fragmentos de UNA transcripción. "
-            "Genera un ANÁLISIS DETALLADO en markdown:\n\n"
-            f"# Análisis — {{nombre}}\n\n"
-            "## Temas identificados\n(Organiza por categoría)\n\n"
-            "## Puntos detallados por tema\n(viñetas con contexto)\n\n"
-            "## Conclusiones\n(viñetas)\n\n"
-            "Fusiona duplicados. No inventes.\n\n"
-            "--- NOTAS ---\n"
-            "{notas}\n"
-            "--- FIN NOTAS ---"
-        )
+        # Defensive fallback: shouldn't happen for files written by
+        # `analizar_visual()` (frame 0 is always timestamp 0), but don't
+        # silently drop content if some other producer wrote this file.
+        description = content[:-1] if content.endswith("\n") else content
 
-    return sys_map, prompt_map, prompt_reduce_summary, prompt_reduce_analysis
-
-
-def _build_visual_map_prompt(instructions: str | None) -> str:
-    if instructions:
-        return (
-            f"Estas son notas de descripciones de pantalla (capturas cada pocos segundos) de "
-            f"una grabación. Extrae SOLO lo relacionado con: {instructions}\n\n"
-            f"Usa viñetas cortas. Conserva las referencias de tiempo [HH:MM:SS].\n\n"
-            f"--- NOTAS DE PANTALLA ---\n{{chunk}}\n--- FIN NOTAS DE PANTALLA ---"
-        )
-    return (
-        "Estas son notas de descripciones de pantalla (capturas cada pocos segundos) de una "
-        "grabación. Extrae en viñetas cortas los elementos relevantes: aplicaciones usadas, "
-        "texto o datos visibles, cambios importantes de contenido. Conserva las referencias "
-        "de tiempo [HH:MM:SS].\n\n"
-        "--- NOTAS DE PANTALLA ---\n{chunk}\n--- FIN NOTAS DE PANTALLA ---"
-    )
-
-
-def _ollama_chat(model: str, system: str, user: str, num_ctx: int = 8192) -> str:
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "stream": False,
-        "options": {"num_ctx": num_ctx, "temperature": 0.2},
-    }
-    req = urllib.request.Request(
-        OLLAMA_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["message"]["content"].strip()
-
-
-def _trozos(texto: str, palabras: int, solape: int):
-    words = texto.split()
-    i = 0
-    while i < len(words):
-        yield " ".join(words[i:i + palabras])
-        i += palabras - solape
+    return VisualNotes(notes=(VisualNote(timestamp_seconds=0, description=description),))
 
 
 def resumir(out_dir: Path, model: str, nombre: str,
@@ -178,65 +103,12 @@ def resumir(out_dir: Path, model: str, nombre: str,
         print(f"  ERROR: falta {txt_path}", file=sys.stderr)
         return
 
-    summary_path = out_dir / "summary.md"
-    analysis_path = out_dir / "analysis.md"
-    if summary_path.exists() and analysis_path.exists():
-        print(f"  [skip] resumen ya existe en {out_dir}")
-        return
+    transcript = _read_transcript(txt_path)
+    visual_notes = _read_visual_notes(out_dir / "visual_notes.md")
 
-    sys_map, prompt_map, prompt_reduce_summary, prompt_reduce_analysis = _build_prompts(
-        instructions, nombre
-    )
-
-    texto = txt_path.read_text(encoding="utf-8")
-    trozos = list(_trozos(texto, PALABRAS_POR_TROZO, SOLAPE))
-    print(f"  {len(texto.split())} palabras -> {len(trozos)} trozos (MAP)")
-
-    notas = []
-    for i, ch in enumerate(trozos, 1):
-        print(f"    MAP trozo {i}/{len(trozos)}")
-        nota = _ollama_chat(model, sys_map, prompt_map.format(chunk=ch))
-        notas.append(f"### Fragmento {i}\n{nota}")
-    notas_join = "\n\n".join(notas)
-
-    visual_path = out_dir / "visual_notes.md"
-    notas_visuales_join = ""
-    if visual_path.exists():
-        visual_texto = visual_path.read_text(encoding="utf-8")
-        if visual_texto.strip():
-            trozos_v = list(_trozos(visual_texto, PALABRAS_POR_TROZO, SOLAPE))
-            print(f"  {len(visual_texto.split())} palabras visuales -> {len(trozos_v)} trozos (MAP visual)")
-            map_prompt_visual = _build_visual_map_prompt(instructions)
-            notas_visuales = []
-            for i, ch in enumerate(trozos_v, 1):
-                print(f"    MAP visual trozo {i}/{len(trozos_v)}")
-                nota = _ollama_chat(model, sys_map, map_prompt_visual.format(chunk=ch))
-                notas_visuales.append(f"### Fragmento visual {i}\n{nota}")
-            notas_visuales_join = "\n\n".join(notas_visuales)
-
-    reduce_summary_user = prompt_reduce_summary.format(notas=notas_join, nombre=nombre)
-    reduce_analysis_user = prompt_reduce_analysis.format(notas=notas_join, nombre=nombre)
-
-    if notas_visuales_join:
-        extra = (
-            "\n\n--- NOTAS DE PANTALLA (video, MAP ya aplicado) ---\n"
-            f"{notas_visuales_join}\n"
-            "--- FIN NOTAS DE PANTALLA ---\n\n"
-            "Con esta información adicional de pantalla, agrega también una sección "
-            "'## Lo mostrado en pantalla' con hallazgos visuales relevantes, y una sección "
-            "final '## Síntesis' que conecte lo dicho (audio) con lo mostrado en pantalla."
-        )
-        reduce_summary_user += extra
-        reduce_analysis_user += extra
-
-    print("  REDUCE -> summary.md")
-    summary = _ollama_chat(model, sys_map, reduce_summary_user, num_ctx=16384)
-    summary_path.write_text(summary + "\n", encoding="utf-8")
-
-    print("  REDUCE -> analysis.md")
-    analysis = _ollama_chat(model, sys_map, reduce_analysis_user, num_ctx=16384)
-    analysis_path.write_text(analysis + "\n", encoding="utf-8")
-    print(f"  ✓ summary.md + analysis.md")
+    provider = OllamaSummarizationProvider(OllamaClient())
+    use_case = SummarizeVideoUseCase(provider)
+    use_case.execute(out_dir, model, transcript, visual_notes, nombre, instructions)
 
 
 def main() -> int:

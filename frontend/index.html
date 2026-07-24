@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Video Reviewer</title>
+<link rel="icon" type="image/png" href="/assets/devpaul.png">
 <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 <script>
 if (typeof marked !== 'undefined') {
@@ -74,6 +75,16 @@ textarea { resize: vertical; min-height: 80px; }
 .sidebar-header {
   padding: 20px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sidebar-header .logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 .sidebar-header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
 .sidebar-header p { font-size: 12px; color: var(--text2); margin-top: 4px; }
@@ -88,6 +99,39 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .btn-primary:hover { background: var(--accent2); }
 
+.session-search {
+  padding: 0 20px 12px;
+  position: relative;
+}
+.session-search input {
+  width: 100%;
+  padding: 9px 32px 9px 34px;
+  font-size: 13px;
+}
+.session-search .icon {
+  position: absolute;
+  left: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text2);
+  font-size: 13px;
+  pointer-events: none;
+}
+.session-search .clear-btn {
+  position: absolute;
+  right: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  color: var(--text2);
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  display: none;
+}
+.session-search .clear-btn:hover { color: var(--text); }
+.session-search.has-query .clear-btn { display: block; }
+
 .session-list {
   flex: 1;
   overflow-y: auto;
@@ -98,15 +142,25 @@ textarea { resize: vertical; min-height: 80px; }
   border-radius: var(--radius);
   cursor: pointer;
   margin-bottom: 4px;
-  transition: background 0.15s;
+  transition: background 0.15s, transform 0.1s;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-width: 0;
 }
 .session-item:hover { background: var(--surface2); }
+.session-item:active { transform: scale(0.99); }
 .session-item.active { background: var(--surface2); border: 1px solid var(--accent); }
-.session-item .name { font-size: 14px; font-weight: 500; }
+.session-item .info { min-width: 0; overflow: hidden; }
+.session-item .name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-item .meta { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.search-empty { padding: 24px 20px; color: var(--text2); font-size: 13px; text-align: center; }
 .session-item .badge {
   font-size: 11px;
   padding: 3px 8px;
@@ -474,11 +528,19 @@ textarea { resize: vertical; min-height: 80px; }
 
 <div class="sidebar">
   <div class="sidebar-header">
-    <h1>Video Reviewer</h1>
-    <p>Transcribe · Analiza · Organiza</p>
+    <img class="logo" src="/assets/devpaul.png" alt="DevPaul">
+    <div>
+      <h1>Video Reviewer</h1>
+      <p>Transcribe · Analiza · Organiza</p>
+    </div>
   </div>
   <div class="sidebar-actions">
     <button class="btn-primary" onclick="openNewSessionModal()">+ Nueva sesión</button>
+  </div>
+  <div class="session-search" id="sessionSearchWrap">
+    <span class="icon">&#128269;</span>
+    <input id="sessionSearchInput" placeholder="Buscar sesiones..." oninput="onSessionSearch(this.value)">
+    <button class="clear-btn" onclick="clearSessionSearch()" title="Limpiar">&times;</button>
   </div>
   <div class="session-list" id="sessionList"></div>
 </div>
@@ -545,6 +607,7 @@ let state = {
   recording: null,
   recordingTimerId: null,
   recordingPrompted: new Set(),
+  sessionSearch: '',
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -599,13 +662,38 @@ async function loadSessions() {
   }
 }
 
+function onSessionSearch(value) {
+  state.sessionSearch = value;
+  $('#sessionSearchWrap').classList.toggle('has-query', value.trim().length > 0);
+  renderSidebar();
+}
+
+function clearSessionSearch() {
+  state.sessionSearch = '';
+  $('#sessionSearchInput').value = '';
+  $('#sessionSearchWrap').classList.remove('has-query');
+  renderSidebar();
+  $('#sessionSearchInput').focus();
+}
+
+function filteredSessions() {
+  const q = state.sessionSearch.trim().toLowerCase();
+  if (!q) return state.sessions;
+  return state.sessions.filter(s => s.name.toLowerCase().includes(q));
+}
+
 function renderSidebar() {
   const list = $('#sessionList');
   if (state.sessions.length === 0) {
-    list.innerHTML = '<div style="padding:20px;color:var(--text2);font-size:13px;text-align:center;">Sin sesiones</div>';
+    list.innerHTML = '<div class="search-empty">Sin sesiones</div>';
     return;
   }
-  list.innerHTML = state.sessions.map(s => {
+  const sessions = filteredSessions();
+  if (sessions.length === 0) {
+    list.innerHTML = `<div class="search-empty">Sin resultados para "${escapeHtml(state.sessionSearch.trim())}"</div>`;
+    return;
+  }
+  list.innerHTML = sessions.map(s => {
     const active = s.id === state.activeSessionId ? ' active' : '';
     const doneCount = s.videos.filter(v => v.status === 'done').length;
     const total = s.videos.length;
@@ -613,12 +701,12 @@ function renderSidebar() {
       ? `<span class="badge status-text-${doneCount === total ? 'done' : 'queued'}">${doneCount}/${total}</span>`
       : '';
     return `
-      <div class="session-item${active}" onclick="selectSession('${s.id}')">
-        <div>
+      <div class="session-item${active}" onclick="selectSession('${s.id}')" title="${escapeHtml(s.name)}">
+        <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
           <div class="meta">${s.videos.length} videos · ${new Date(s.created_at).toLocaleDateString()}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
           ${badge}
           <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Eliminar">&times;</button>
         </div>
