@@ -3,19 +3,22 @@
 __pycache__/
 *.py[cod]
 
-# Pipeline I/O (pesado / generado)
-videos/*.mp4
-output/
-sessions/
-sessions.json
+# Pipeline I/O (pesado / generado) — solo raíz del repo.
+# Anchor con "/" (no "./" — eso NO es sintaxis válida de gitignore y no
+# hacía nada). Con "/" al inicio, estos patrones matchean únicamente
+# /videos, /sessions, /output en la raíz — nunca
+# pipeline/domain/videos/, pipeline/application/sessions/, etc. (código).
+/videos/
+/output/
+/sessions/
+/sessions.json
 
 # Modelos / cachés
 *.bin
 *.pt
-docs/
-videos/
-.aider.instructions.md
-.aiderignore
-CLAUDE.md
-.opencode.json
+/docs/
+/.aider.instructions.md
+/.aiderignore
+/CLAUDE.md
+/.opencode.json
 .claude/

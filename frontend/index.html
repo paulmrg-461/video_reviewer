@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Video Reviewer</title>
+<link rel="icon" type="image/png" href="/assets/devpaul.png">
 <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 <script>
 if (typeof marked !== 'undefined') {
@@ -74,6 +75,16 @@ textarea { resize: vertical; min-height: 80px; }
 .sidebar-header {
   padding: 20px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sidebar-header .logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 .sidebar-header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
 .sidebar-header p { font-size: 12px; color: var(--text2); margin-top: 4px; }
@@ -88,6 +99,46 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .btn-primary:hover { background: var(--accent2); }
 
+.session-search {
+  padding: 0 20px 12px;
+}
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-box input {
+  width: 100%;
+  padding: 9px 32px 9px 34px;
+  font-size: 13px;
+}
+.search-box .icon {
+  position: absolute;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1;
+  pointer-events: none;
+}
+.search-box .clear-btn {
+  position: absolute;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  color: var(--text2);
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  display: none;
+}
+.search-box .clear-btn:hover { color: var(--text); }
+.session-search.has-query .clear-btn { display: flex; }
+
 .session-list {
   flex: 1;
   overflow-y: auto;
@@ -98,15 +149,25 @@ textarea { resize: vertical; min-height: 80px; }
   border-radius: var(--radius);
   cursor: pointer;
   margin-bottom: 4px;
-  transition: background 0.15s;
+  transition: background 0.15s, transform 0.1s;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-width: 0;
 }
 .session-item:hover { background: var(--surface2); }
+.session-item:active { transform: scale(0.99); }
 .session-item.active { background: var(--surface2); border: 1px solid var(--accent); }
-.session-item .name { font-size: 14px; font-weight: 500; }
+.session-item .info { min-width: 0; overflow: hidden; }
+.session-item .name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-item .meta { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.search-empty { padding: 24px 20px; color: var(--text2); font-size: 13px; text-align: center; }
 .session-item .badge {
   font-size: 11px;
   padding: 3px 8px;
@@ -212,7 +273,7 @@ textarea { resize: vertical; min-height: 80px; }
   flex-shrink: 0;
 }
 .status-dot.queued { background: var(--text2); }
-.status-dot.extracting_audio, .status-dot.transcribing, .status-dot.summarizing {
+.status-dot.extracting_audio, .status-dot.transcribing, .status-dot.summarizing, .status-dot.analyzing_visual {
   background: var(--yellow); animation: pulse 1s infinite;
 }
 .status-dot.done { background: var(--green); }
@@ -223,7 +284,26 @@ textarea { resize: vertical; min-height: 80px; }
 .video-card .info .vname { font-size: 14px; font-weight: 500; }
 .video-card .info .vpath { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-card .info .vstatus { font-size: 11px; margin-top: 2px; }
-.status-text-queued, .status-text-extracting_audio, .status-text-transcribing, .status-text-summarizing { color: var(--yellow); }
+.status-text-queued, .status-text-extracting_audio, .status-text-transcribing, .status-text-summarizing, .status-text-analyzing_visual { color: var(--yellow); }
+.btn-record {
+  background: var(--surface2);
+  color: var(--red);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-record:hover { border-color: var(--red); }
+.btn-record.active {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red);
+}
+.recording-timer {
+  color: var(--red);
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
 .status-text-done { color: var(--green); }
 .status-text-error { color: var(--red); }
 
@@ -455,11 +535,21 @@ textarea { resize: vertical; min-height: 80px; }
 
 <div class="sidebar">
   <div class="sidebar-header">
-    <h1>Video Reviewer</h1>
-    <p>Transcribe · Analiza · Organiza</p>
+    <img class="logo" src="/assets/devpaul.png" alt="DevPaul">
+    <div>
+      <h1>Video Reviewer</h1>
+      <p>Transcribe · Analiza · Organiza</p>
+    </div>
   </div>
   <div class="sidebar-actions">
     <button class="btn-primary" onclick="openNewSessionModal()">+ Nueva sesión</button>
+  </div>
+  <div class="session-search" id="sessionSearchWrap">
+    <div class="search-box">
+      <span class="icon">&#128269;</span>
+      <input id="sessionSearchInput" placeholder="Buscar sesiones..." oninput="onSessionSearch(this.value)">
+      <button class="clear-btn" onclick="clearSessionSearch()" title="Limpiar">&times;</button>
+    </div>
   </div>
   <div class="session-list" id="sessionList"></div>
 </div>
@@ -482,6 +572,7 @@ textarea { resize: vertical; min-height: 80px; }
     <button data-tab="summary" class="active" onclick="switchDetailTab('summary')">Resumen</button>
     <button data-tab="analysis" onclick="switchDetailTab('analysis')">Análisis</button>
     <button data-tab="transcript" onclick="switchDetailTab('transcript')">Transcripción</button>
+    <button data-tab="visual" onclick="switchDetailTab('visual')">Pantalla</button>
     <button data-tab="save" onclick="switchDetailTab('save')">Guardar</button>
   </div>
   <div class="detail-toolbar" id="detailToolbar" style="display:none;">
@@ -522,6 +613,10 @@ let state = {
   activeDetailTab: 'summary',
   viewMode: 'preview',
   currentDetailText: '',
+  recording: null,
+  recordingTimerId: null,
+  recordingPrompted: new Set(),
+  sessionSearch: '',
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -532,6 +627,7 @@ function statusLabel(s) {
     queued: 'En cola',
     extracting_audio: 'Extrayendo audio',
     transcribing: 'Transcribiendo',
+    analyzing_visual: 'Analizando pantalla',
     summarizing: 'Analizando',
     done: 'Completado',
     error: 'Error'
@@ -575,13 +671,38 @@ async function loadSessions() {
   }
 }
 
+function onSessionSearch(value) {
+  state.sessionSearch = value;
+  $('#sessionSearchWrap').classList.toggle('has-query', value.trim().length > 0);
+  renderSidebar();
+}
+
+function clearSessionSearch() {
+  state.sessionSearch = '';
+  $('#sessionSearchInput').value = '';
+  $('#sessionSearchWrap').classList.remove('has-query');
+  renderSidebar();
+  $('#sessionSearchInput').focus();
+}
+
+function filteredSessions() {
+  const q = state.sessionSearch.trim().toLowerCase();
+  if (!q) return state.sessions;
+  return state.sessions.filter(s => s.name.toLowerCase().includes(q));
+}
+
 function renderSidebar() {
   const list = $('#sessionList');
   if (state.sessions.length === 0) {
-    list.innerHTML = '<div style="padding:20px;color:var(--text2);font-size:13px;text-align:center;">Sin sesiones</div>';
+    list.innerHTML = '<div class="search-empty">Sin sesiones</div>';
     return;
   }
-  list.innerHTML = state.sessions.map(s => {
+  const sessions = filteredSessions();
+  if (sessions.length === 0) {
+    list.innerHTML = `<div class="search-empty">Sin resultados para "${escapeHtml(state.sessionSearch.trim())}"</div>`;
+    return;
+  }
+  list.innerHTML = sessions.map(s => {
     const active = s.id === state.activeSessionId ? ' active' : '';
     const doneCount = s.videos.filter(v => v.status === 'done').length;
     const total = s.videos.length;
@@ -589,12 +710,12 @@ function renderSidebar() {
       ? `<span class="badge status-text-${doneCount === total ? 'done' : 'queued'}">${doneCount}/${total}</span>`
       : '';
     return `
-      <div class="session-item${active}" onclick="selectSession('${s.id}')">
-        <div>
+      <div class="session-item${active}" onclick="selectSession('${s.id}')" title="${escapeHtml(s.name)}">
+        <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
           <div class="meta">${s.videos.length} videos · ${new Date(s.created_at).toLocaleDateString()}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
           ${badge}
           <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Eliminar">&times;</button>
         </div>
@@ -607,6 +728,7 @@ async function selectSession(sid) {
   state.activeVideoId = null;
   closeDetail();
   renderSidebar();
+  await checkActiveRecording(sid);
   renderSessionView();
 }
 
@@ -614,12 +736,25 @@ function renderSessionView() {
   const session = state.sessions.find(s => s.id === state.activeSessionId);
   if (!session) return;
 
+  const recording = state.recording && state.recording.sid === session.id ? state.recording : null;
+  const elapsed = recording ? fmtElapsed(Math.floor((Date.now() - recording.startedAt.getTime()) / 1000)) : '';
+
   const main = $('#mainContent');
   main.innerHTML = `
     <div class="session-view">
       <div class="session-top">
-        <h2>${escapeHtml(session.name)}</h2>
-        ${session.instructions ? `<div class="instructions-preview">📋 ${escapeHtml(session.instructions)}</div>` : ''}
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+          <div>
+            <h2>${escapeHtml(session.name)}</h2>
+            ${session.instructions ? `<div class="instructions-preview">📋 ${escapeHtml(session.instructions)}</div>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+            ${recording ? `<span class="recording-timer" id="recordingTimer">${elapsed}</span>` : ''}
+            <button class="btn-sm btn-record${recording ? ' active' : ''}" onclick="toggleRecording()">
+              ${recording ? '⏹ Detener grabación' : '🔴 Grabar pantalla+audio'}
+            </button>
+          </div>
+        </div>
       </div>
       <div class="add-video-bar">
         <div class="field">
@@ -634,6 +769,12 @@ function renderSessionView() {
             <option value="auto">Auto</option>
           </select>
         </div>
+        <div class="field field-small">
+          <label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;height:42px;">
+            <input type="checkbox" id="videoAnalyzeVisual" style="width:auto;"> Análisis visual
+          </label>
+        </div>
         <button class="btn-accent" onclick="addVideos()">+ Agregar</button>
       </div>
       <div class="video-list" id="videoList">
@@ -642,6 +783,8 @@ function renderSessionView() {
           : renderVideoCards(session.videos)}
       </div>
     </div>`;
+
+  if (recording) startRecordingTimer();
 }
 
 function renderVideoCards(videos) {
@@ -651,8 +794,8 @@ function renderVideoCards(videos) {
       <div class="video-card${sel}" onclick="selectVideo('${v.id}')">
         <div class="status-dot ${v.status}"></div>
         <div class="info">
-          <div class="vname">${escapeHtml(v.name)}</div>
-          <div class="vpath">${escapeHtml(v.original_path)}</div>
+          <div class="vname">${escapeHtml(v.name)}${v.analyze_visual ? ' 🖥️' : ''}</div>
+          <div class="vpath">${v.original_deleted ? '🗑️ grabación mp4 eliminada (análisis conservado)' : escapeHtml(v.original_path)}</div>
           <div class="vstatus status-text-${v.status}">${statusLabel(v.status)}</div>
         </div>
         <div class="actions">
@@ -671,10 +814,11 @@ async function addVideos() {
   if (!raw.trim()) return;
 
   const paths = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  const analyzeVisual = $('#videoAnalyzeVisual')?.checked || false;
   try {
     const res = await api(`/sessions/${state.activeSessionId}/videos`, {
       method: 'POST',
-      body: JSON.stringify({ paths, language: lang.value }),
+      body: JSON.stringify({ paths, language: lang.value, analyze_visual: analyzeVisual }),
     });
     input.value = '';
     await loadSessions();
@@ -788,6 +932,7 @@ async function loadDetailContent(tab) {
       summary: `/sessions/${sid}/videos/${vid}/summary`,
       analysis: `/sessions/${sid}/videos/${vid}/analysis`,
       transcript: `/sessions/${sid}/videos/${vid}/transcript`,
+      visual: `/sessions/${sid}/videos/${vid}/visual`,
     };
 
     const ep = endpoints[tab];
@@ -920,6 +1065,111 @@ async function deleteSession(sid) {
   }
 }
 
+function fmtElapsed(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function startRecordingTimer() {
+  stopRecordingTimer();
+  state.recordingTimerId = setInterval(() => {
+    const el = $('#recordingTimer');
+    if (!el || !state.recording) return;
+    el.textContent = fmtElapsed(Math.floor((Date.now() - state.recording.startedAt.getTime()) / 1000));
+  }, 1000);
+}
+
+function stopRecordingTimer() {
+  if (state.recordingTimerId) { clearInterval(state.recordingTimerId); state.recordingTimerId = null; }
+}
+
+async function checkActiveRecording(sid) {
+  try {
+    const status = await api('/record/status');
+    const entry = Object.entries(status).find(([, r]) => r.session_id === sid);
+    if (entry) {
+      const [rid, r] = entry;
+      state.recording = { sid, rid, startedAt: new Date(r.started_at) };
+    } else if (state.recording && state.recording.sid === sid) {
+      state.recording = null;
+      stopRecordingTimer();
+    }
+  } catch (e) { /* servidor sin este endpoint aún, ignorar */ }
+}
+
+async function toggleRecording() {
+  if (state.recording && state.recording.sid === state.activeSessionId) {
+    await stopRecording();
+  } else {
+    await startRecording();
+  }
+}
+
+async function startRecording() {
+  const sid = state.activeSessionId;
+  if (!sid) return;
+  try {
+    const res = await api(`/sessions/${sid}/record/start`, { method: 'POST' });
+    state.recording = { sid, rid: res.recording_id, startedAt: new Date(res.started_at) };
+    renderSessionView();
+    toast('Grabando — elige pantalla/ventana en el diálogo del sistema');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function stopRecording() {
+  const sid = state.recording?.sid;
+  const rid = state.recording?.rid;
+  if (!sid || !rid) return;
+  try {
+    toast('Finalizando grabación...');
+    await api(`/sessions/${sid}/record/${rid}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ analyze_visual: true }),
+    });
+    stopRecordingTimer();
+    state.recording = null;
+    await loadSessions();
+    renderSessionView();
+    toast('Grabación agregada, procesando en background');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function checkRecordingCleanup() {
+  for (const s of state.sessions) {
+    for (const v of s.videos) {
+      if (v.is_recording && v.status === 'done' && !v.original_deleted
+          && !state.recordingPrompted.has(v.id)) {
+        state.recordingPrompted.add(v.id);
+        promptDeleteRecording(s.id, v);
+      }
+    }
+  }
+}
+
+async function promptDeleteRecording(sid, video) {
+  const del = confirm(
+    `Análisis de "${video.name}" completo.\n\n` +
+    `¿Eliminar el archivo de grabación (mp4) para liberar espacio?\n` +
+    `El resumen, análisis y transcripción se conservan.`
+  );
+  if (!del) return;
+  try {
+    await api(`/sessions/${sid}/videos/${video.id}/recording`, { method: 'DELETE' });
+    toast('Grabación mp4 eliminada, análisis conservado');
+    await loadSessions();
+    if (state.activeSessionId === sid) renderSessionView();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 function startSSE() {
   const es = new EventSource(API + '/progress');
   es.onmessage = (e) => {
@@ -927,6 +1177,7 @@ function startSSE() {
       const sessions = JSON.parse(e.data);
       state.sessions = sessions;
       renderSidebar();
+      checkRecordingCleanup();
       if (state.activeSessionId) {
         const session = state.sessions.find(s => s.id === state.activeSessionId);
         if (session) {
