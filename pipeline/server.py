@@ -66,6 +66,12 @@ async def startup() -> None:
     asyncio.create_task(worker())
 
 
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, stop_recording_use_case.stop_all_recorders)
+
+
 @app.get("/api/progress")
 async def progress_stream(req: Request):
     async def event_generator():

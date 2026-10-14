@@ -23,6 +23,9 @@ class InMemoryActiveRecordingsRegistry:
     def list_all(self) -> list[ActiveRecording]:
         return [recording for recording, _handle in self._entries.values()]
 
+    def list_entries(self) -> list[tuple[ActiveRecording, object]]:
+        return list(self._entries.values())
+
     def get_by_session(self, session_id: str) -> ActiveRecording | None:
         for recording, _handle in self._entries.values():
             if recording.session_id == session_id:

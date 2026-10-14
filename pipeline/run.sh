@@ -20,7 +20,7 @@ if [ "${1:-}" = "server" ]; then
     shift
     PORT="${1:-8000}"
     echo "Iniciando Video Reviewer en http://localhost:${PORT}"
-    exec "$VENV/bin/uvicorn" server:app --host 0.0.0.0 --port "$PORT" --reload
+    exec "$VENV/bin/uvicorn" server:app --host 0.0.0.0 --port "$PORT" --reload --timeout-graceful-shutdown 5
 else
     exec "$VENV/bin/python" run_all.py "$@"
 fi

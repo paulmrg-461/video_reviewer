@@ -69,3 +69,11 @@ class RecordingPathTraversalError(Exception):
     def __init__(self, path: str) -> None:
         self.path = path
         super().__init__(f"Path outside recordings directory: {path}")
+
+
+class RecorderStartFailedError(Exception):
+    """Recorder refused to start or died on launch (disk full, portal error)."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)

@@ -140,6 +140,7 @@ retry_video_use_case = RetryVideoUseCase(_video_repo, processing_queue.put)
 # alternate implementations of `_video_repo`/`gateway`/etc.
 
 _screen_recorder = GpuScreenRecorderAdapter()
+screen_recorder = _screen_recorder
 active_recordings_registry = InMemoryActiveRecordingsRegistry()
 
 start_recording_use_case = StartRecordingUseCase(

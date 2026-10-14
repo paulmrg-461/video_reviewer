@@ -14,11 +14,18 @@ import subprocess
 from pathlib import Path
 
 from pipeline import recorder
+from pipeline.application.recording.exceptions import RecorderStartFailedError
 
 
 class GpuScreenRecorderAdapter:
     def start(self, output: Path) -> subprocess.Popen:
-        return recorder.iniciar(output)
+        try:
+            return recorder.iniciar(output)
+        except recorder.RecorderError as exc:
+            raise RecorderStartFailedError(str(exc)) from exc
 
-    def stop(self, handle: object, timeout: float = 15.0) -> bool:
+    def stop(self, handle: object, timeout: float = 45.0) -> bool:
         return recorder.detener(handle, timeout)
+
+    def is_alive(self, handle: object) -> bool:
+        return recorder.esta_vivo(handle)

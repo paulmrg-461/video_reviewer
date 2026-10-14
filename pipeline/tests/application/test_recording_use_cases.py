@@ -47,9 +47,12 @@ class FakeScreenRecorder:
         self._next_handle += 1
         return f"handle-{self._next_handle}"
 
-    def stop(self, handle: object, timeout: float = 15.0) -> bool:
+    def stop(self, handle: object, timeout: float = 45.0) -> bool:
         self.stopped.append(handle)
         return self.stop_result
+
+    def is_alive(self, handle: object) -> bool:
+        return True
 
 
 class FakeRegistry:
@@ -67,6 +70,9 @@ class FakeRegistry:
 
     def list_all(self) -> list[ActiveRecording]:
         return [r for r, _h in self._entries.values()]
+
+    def list_entries(self) -> list[tuple[ActiveRecording, object]]:
+        return list(self._entries.values())
 
     def get_by_session(self, session_id: str) -> ActiveRecording | None:
         for r, _h in self._entries.values():
@@ -478,3 +484,93 @@ def test_delete_recording_file_succeeds_for_valid_recording(tmp_path) -> None:
     assert not rec_file.exists()
     assert video_repo.videos[("sess-1", "vid-1")].original_deleted is True
     assert video_repo.updated == [video]
+
+
+def _stop_use_case(tmp_path, recorder, registry, video_repo, enqueue):
+    gateway = FakeGateway({"sess-1": {"id": "sess-1", "instructions": ""}})
+    return StopRecordingUseCase(
+        recorder, registry, video_repo, gateway, FakeIdProvider(["vid-x", "vid-y"]), tmp_path, enqueue
+    )
+
+
+def test_stop_recording_unclean_stop_keeps_non_empty_file(tmp_path) -> None:
+    recorder = FakeScreenRecorder()
+    recorder.stop_result = False
+    registry = FakeRegistry()
+    output = tmp_path / "sess-1" / "rec_rec-a.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"data")
+    registry.track(
+        ActiveRecording(id="rec-a", session_id="sess-1", output_path=output, started_at="t"), "h"
+    )
+    video_repo, enqueue = FakeVideoRepository(), FakeEnqueue()
+    use_case = _stop_use_case(tmp_path, recorder, registry, video_repo, enqueue)
+
+    video = asyncio.run(use_case.execute("sess-1", "rec-a", "es", True, ""))
+
+    assert video.original_path == str(output)
+    assert len(enqueue.tasks) == 1
+
+
+def test_recover_orphans_registers_only_unknown_non_empty_recordings(tmp_path) -> None:
+    sdir = tmp_path / "sess-1"
+    sdir.mkdir()
+    (sdir / "rec_orphan.mp4").write_bytes(b"data")
+    (sdir / "rec_empty.mp4").write_bytes(b"")
+    video_repo, enqueue = FakeVideoRepository(), FakeEnqueue()
+    use_case = _stop_use_case(tmp_path, FakeScreenRecorder(), FakeRegistry(), video_repo, enqueue)
+
+    first = asyncio.run(use_case.recover_orphans("sess-1", min_age_seconds=0))
+    second = asyncio.run(use_case.recover_orphans("sess-1", min_age_seconds=0))
+
+    assert [v.name for v in first] == ["rec_orphan.mp4"]
+    assert second == []
+    assert len(enqueue.tasks) == 1
+
+
+def test_recover_orphans_skips_recently_modified_files(tmp_path) -> None:
+    sdir = tmp_path / "sess-1"
+    sdir.mkdir()
+    (sdir / "rec_live.mp4").write_bytes(b"data")  # just written: still recording?
+    use_case = _stop_use_case(
+        tmp_path, FakeScreenRecorder(), FakeRegistry(), FakeVideoRepository(), FakeEnqueue()
+    )
+
+    assert asyncio.run(use_case.recover_orphans("sess-1")) == []
+
+
+def test_stop_retry_after_lost_registry_returns_existing_video(tmp_path) -> None:
+    output = tmp_path / "sess-1" / "rec_rec-a.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"data")
+    video_repo, enqueue = FakeVideoRepository(), FakeEnqueue()
+    use_case = _stop_use_case(tmp_path, FakeScreenRecorder(), FakeRegistry(), video_repo, enqueue)
+
+    first = asyncio.run(use_case.execute("sess-1", "rec-a", "es", True, ""))
+    second = asyncio.run(use_case.execute("sess-1", "rec-a", "es", True, ""))
+
+    assert second.id == first.id
+    assert len(enqueue.tasks) == 1
+
+
+def test_stop_unknown_recording_without_file_raises_not_found(tmp_path) -> None:
+    use_case = _stop_use_case(
+        tmp_path, FakeScreenRecorder(), FakeRegistry(), FakeVideoRepository(), FakeEnqueue()
+    )
+    with pytest.raises(RecordingNotFoundError):
+        asyncio.run(use_case.execute("sess-1", "nope", "es", True, ""))
+
+
+def test_stop_all_recorders_stops_and_untracks_everything(tmp_path) -> None:
+    recorder, registry = FakeScreenRecorder(), FakeRegistry()
+    for rid in ("a", "b"):
+        registry.track(
+            ActiveRecording(id=rid, session_id="sess-1", output_path=tmp_path / rid, started_at="t"),
+            f"h-{rid}",
+        )
+    use_case = _stop_use_case(tmp_path, recorder, registry, FakeVideoRepository(), FakeEnqueue())
+
+    use_case.stop_all_recorders()
+
+    assert recorder.stopped == ["h-a", "h-b"]
+    assert registry.list_all() == []

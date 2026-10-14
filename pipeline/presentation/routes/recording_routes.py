@@ -19,6 +19,7 @@ from pipeline.application.recording.exceptions import (
     ConcurrentRecordingError,
     NotARecordingError,
     RecorderNotAvailableError,
+    RecorderStartFailedError,
     RecordingNotFoundError,
     RecordingPathTraversalError,
     RecordingSaveFailedError,
@@ -27,6 +28,7 @@ from pipeline.application.sessions.exceptions import SessionNotFoundError
 from pipeline.application.videos.exceptions import VideoNotFoundError
 from pipeline.presentation.composition_root import (
     active_recordings_registry,
+    screen_recorder as recorder,
     start_recording_use_case,
     stop_recording_use_case,
     delete_recording_file_use_case,
@@ -45,6 +47,8 @@ async def start_recording(sid: str):
         raise HTTPException(409, "Ya hay una grabación activa para esta sesión")
     except RecorderNotAvailableError:
         raise HTTPException(500, "gpu-screen-recorder no está instalado")
+    except RecorderStartFailedError as exc:
+        raise HTTPException(507, exc.reason)
 
     return {"recording_id": recording.id, "started_at": recording.started_at}
 
@@ -88,6 +92,12 @@ async def stop_recording(sid: str, rid: str, req: Request):
     }
 
 
+@router.post("/api/sessions/{sid}/record/recover")
+async def recover_recordings(sid: str):
+    videos = await stop_recording_use_case.recover_orphans(sid)
+    return {"recovered": [{"id": v.id.value, "name": v.name} for v in videos]}
+
+
 @router.delete("/api/sessions/{sid}/videos/{vid}/recording")
 async def delete_recording_file(sid: str, vid: str):
     try:
@@ -104,6 +114,11 @@ async def delete_recording_file(sid: str, vid: str):
 @router.get("/api/record/status")
 async def recording_status():
     return {
-        r.id: {"session_id": r.session_id, "started_at": r.started_at}
-        for r in active_recordings_registry.list_all()
+        r.id: {
+            "session_id": r.session_id,
+            "started_at": r.started_at,
+            "alive": recorder.is_alive(handle),
+            "size_bytes": r.output_path.stat().st_size if r.output_path.exists() else 0,
+        }
+        for r, handle in active_recordings_registry.list_entries()
     }

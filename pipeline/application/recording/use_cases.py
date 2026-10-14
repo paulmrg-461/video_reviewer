@@ -13,6 +13,8 @@ receives its `.put` method the same way `AddVideosToSessionUseCase`/
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import typing
 from pathlib import Path
 
@@ -38,6 +40,10 @@ from pipeline.domain.sessions.session import SessionId
 from pipeline.domain.videos.value_objects import ProcessingOptions, VideoId
 from pipeline.domain.videos.video import Video
 from pipeline.shared.config import DEFAULT_RECORD_INSTRUCTIONS
+
+logger = logging.getLogger(__name__)
+
+RECOVER_MIN_AGE_SECONDS = 20.0
 
 Enqueue = typing.Callable[[dict], typing.Awaitable[None]]
 
@@ -129,7 +135,9 @@ class StopRecordingUseCase:
     ) -> Video:
         tracked = self._registry.get(recording_id)
         if tracked is None or tracked[0].session_id != session_id:
-            raise RecordingNotFoundError(session_id, recording_id)
+            return await self._resume_finished(
+                session_id, recording_id, language, analyze_visual, instructions_override
+            )
         recording, handle = tracked
 
         loop = asyncio.get_running_loop()
@@ -137,9 +145,52 @@ class StopRecordingUseCase:
         self._registry.untrack(recording_id)
 
         output = recording.output_path
-        if not ok or not output.exists() or output.stat().st_size == 0:
+        # An unclean stop (timeout -> terminate) can still leave a usable mp4:
+        # never discard a non-empty file, let processing decide if it is readable.
+        if not output.exists() or output.stat().st_size == 0:
             raise RecordingSaveFailedError()
+        if not ok:
+            logger.warning("Recorder did not close cleanly, keeping %s", output)
 
+        return await self._register(
+            session_id, output, language, analyze_visual, instructions_override
+        )
+
+    async def _resume_finished(
+        self,
+        session_id: str,
+        recording_id: str,
+        language: str,
+        analyze_visual: bool,
+        instructions_override: str,
+    ) -> Video:
+        """Idempotent stop: a retry after a failed/lost stop must not 404 while
+        the recording's file still exists on disk."""
+        for video in await self._video_repo.list_by_session(SessionId(session_id)):
+            if f"rec_{recording_id}." in video.original_path:
+                return video
+        output = self._sessions_root / session_id / f"rec_{recording_id}.mp4"
+        if not output.exists() or output.stat().st_size == 0:
+            raise RecordingNotFoundError(session_id, recording_id)
+        return await self._register(
+            session_id, output, language, analyze_visual, instructions_override
+        )
+
+    def stop_all_recorders(self) -> None:
+        """Server shutdown: finalize every running recorder so files are
+        playable. Files are picked up later by `recover_orphans`."""
+        for recording, handle in self._registry.list_entries():
+            self._recorder.stop(handle)
+            self._registry.untrack(recording.id)
+
+    async def _register(
+        self,
+        session_id: str,
+        output: Path,
+        language: str,
+        analyze_visual: bool,
+        instructions_override: str,
+    ) -> Video:
         session = await self._gateway.get_session(session_id)
         instructions = (
             instructions_override.strip()
@@ -172,6 +223,32 @@ class StopRecordingUseCase:
             "analyze_visual": analyze_visual,
         })
         return video
+
+    async def recover_orphans(
+        self,
+        session_id: str,
+        language: str = "es",
+        analyze_visual: bool = True,
+        min_age_seconds: float = RECOVER_MIN_AGE_SECONDS,
+    ) -> list[Video]:
+        """Register `rec_*.mp4` files in the session dir that no video points to
+        (e.g. a stop that failed before the video was created)."""
+        known = {
+            Path(v.original_path).name
+            for v in await self._video_repo.list_by_session(SessionId(session_id))
+        }
+        active = self._registry.get_by_session(session_id)
+        recovered = []
+        for mp4 in sorted((self._sessions_root / session_id).glob("rec_*.mp4")):
+            if mp4.name in known or (active and active.output_path == mp4):
+                continue
+            stat = mp4.stat()
+            if stat.st_size == 0 or time.time() - stat.st_mtime < min_age_seconds:
+                continue  # empty, or maybe still being written
+            recovered.append(
+                await self._register(session_id, mp4, language, analyze_visual, "")
+            )
+        return recovered
 
 
 class DeleteRecordingFileUseCase:
