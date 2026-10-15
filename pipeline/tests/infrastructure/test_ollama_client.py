@@ -51,7 +51,7 @@ def test_chat_sends_system_user_and_num_ctx_and_strips_result(monkeypatch):
             {"role": "user", "content": "user prompt"},
         ],
         "stream": False,
-        "options": {"num_ctx": 16384, "temperature": 0.2},
+        "options": {"num_ctx": 16384, "temperature": 0.0, "seed": 42},
     }
 
 
@@ -87,7 +87,7 @@ def test_chat_with_image_sends_images_field_no_system_no_num_ctx(monkeypatch):
     payload = captured["payload"]
     assert payload["model"] == "gemma4:e4b"
     assert payload["stream"] is False
-    assert payload["options"] == {"temperature": 0.2}
+    assert payload["options"] == {"temperature": 0.0, "seed": 42}
     assert "system" not in json.dumps(payload)  # no system role/field at all
     assert len(payload["messages"]) == 1
     msg = payload["messages"][0]
@@ -109,3 +109,17 @@ def test_base_url_is_configurable(monkeypatch):
     OllamaClient(base_url="http://otherhost:1234").chat("m", "s", "u")
 
     assert captured["url"] == "http://otherhost:1234/api/chat"
+
+
+def test_chat_warns_when_prompt_fills_context(monkeypatch, capsys):
+    monkeypatch.setattr(
+        ollama_client_module.urllib.request,
+        "urlopen",
+        lambda req, timeout=None: _FakeResponse(
+            {"message": {"content": "ok"}, "prompt_eval_count": 8192}
+        ),
+    )
+
+    OllamaClient().chat("qwen2.5:14b", "sys", "user")
+
+    assert "posible truncado" in capsys.readouterr().out

@@ -14,6 +14,10 @@ import base64
 import json
 import urllib.request
 
+# Deterministic extraction: sampling noise is a source of invented details.
+TEMPERATURE = 0.0
+SEED = 42
+
 
 class OllamaClient:
     def __init__(self, base_url: str = "http://localhost:11434") -> None:
@@ -29,7 +33,7 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            "options": {"num_ctx": num_ctx, "temperature": 0.2},
+            "options": {"num_ctx": num_ctx, "temperature": TEMPERATURE, "seed": SEED},
         }
         req = urllib.request.Request(
             self._chat_url,
@@ -38,6 +42,12 @@ class OllamaClient:
         )
         with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        used = data.get("prompt_eval_count", 0)
+        if used >= num_ctx - 32:
+            # Ollama silently drops the oldest tokens (the system prompt and
+            # the start of the input) when the prompt overflows the context:
+            # the model then invents what it never saw.
+            print(f"  ⚠ prompt ({used} tokens) llena num_ctx={num_ctx}: posible truncado")
         return data["message"]["content"].strip()
 
     def chat_with_image(self, model: str, prompt: str, image_bytes: bytes) -> str:
@@ -48,7 +58,7 @@ class OllamaClient:
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": [b64]}],
             "stream": False,
-            "options": {"temperature": 0.2},
+            "options": {"temperature": TEMPERATURE, "seed": SEED},
         }
         req = urllib.request.Request(
             self._chat_url,

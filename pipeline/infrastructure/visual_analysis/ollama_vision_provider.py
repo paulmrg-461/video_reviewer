@@ -13,8 +13,9 @@ from pipeline.infrastructure.ollama.ollama_client import OllamaClient
 PROMPT_FRAME = (
     "Esta es una captura de pantalla tomada durante una grabación de escritorio/reunión. "
     "Describe en viñetas cortas: qué aplicación o ventana está activa, qué texto o datos "
-    "relevantes son visibles, y qué está ocurriendo en pantalla. No inventes texto que no "
-    "puedas leer con claridad. Si la pantalla está vacía o sin contenido relevante, dilo "
+    "relevantes son visibles, y qué está ocurriendo en pantalla. Describe SOLO lo que se ve; "
+    "transcribe textualmente cifras y nombres legibles y marca [ilegible] lo que no puedas "
+    "leer con claridad. No deduzcas ni completes información que no esté visible. Si la pantalla está vacía o sin contenido relevante, dilo "
     "brevemente en una línea."
 )
 

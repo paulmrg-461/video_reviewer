@@ -23,11 +23,15 @@ from pipeline.domain.videos.transcript import Transcript
 from pipeline.domain.videos.visual_note import VisualNotes
 from pipeline.infrastructure.ollama.ollama_client import OllamaClient
 from pipeline.infrastructure.summarization.prompt_templates import (
+    NO_INFO,
     build_prompts,
     build_visual_map_prompt,
 )
 
-PALABRAS_POR_TROZO = 3500
+# ~2200 palabras de español ≈ 4-5k tokens: cabe en num_ctx=8192 junto con el prompt.
+PALABRAS_POR_TROZO = 2200
+# Si las notas superan esto, el REDUCE desbordaría num_ctx=16384: se consolidan antes.
+MAX_PALABRAS_REDUCE = 6000
 SOLAPE = 200
 
 
@@ -70,8 +74,9 @@ class OllamaSummarizationProvider:
         for i, ch in enumerate(trozos, 1):
             print(f"    MAP trozo {i}/{len(trozos)}")
             nota = self._client.chat(model, sys_map, prompt_map.format(chunk=ch))
-            notas.append(f"### Fragmento {i}\n{nota}")
-        notas_join = "\n\n".join(notas)
+            if NO_INFO not in nota:
+                notas.append(f"### Fragmento {i}\n{nota}")
+        notas_join = self._fit_for_reduce(model, sys_map, notas)
 
         notas_visuales_join = ""
         if visual_notes is not None:
@@ -84,8 +89,12 @@ class OllamaSummarizationProvider:
                 for i, ch in enumerate(trozos_v, 1):
                     print(f"    MAP visual trozo {i}/{len(trozos_v)}")
                     nota = self._client.chat(model, sys_map, map_prompt_visual.format(chunk=ch))
-                    notas_visuales.append(f"### Fragmento visual {i}\n{nota}")
-                notas_visuales_join = "\n\n".join(notas_visuales)
+                    if NO_INFO not in nota:
+                        notas_visuales.append(f"### Fragmento visual {i}\n{nota}")
+                notas_visuales_join = self._fit_for_reduce(model, sys_map, notas_visuales)
+
+        if not notas_join.strip():
+            notas_join = "(No se encontró información relevante en la transcripción.)"
 
         reduce_summary_user = prompt_reduce_summary.format(notas=notas_join, nombre=video_name)
         reduce_analysis_user = prompt_reduce_analysis.format(notas=notas_join, nombre=video_name)
@@ -110,3 +119,22 @@ class OllamaSummarizationProvider:
         print(f"  ✓ summary.md + analysis.md")
 
         return Summary(content=summary_content + "\n"), AnalysisResult(content=analysis_content + "\n")
+
+    def _fit_for_reduce(self, model: str, system: str, notas: list[str]) -> str:
+        """Join notes; while they would overflow the REDUCE context, consolidate
+        them in groups (extra MAP level) instead of letting Ollama truncate."""
+        joined = "\n\n".join(notas)
+        while len(joined.split()) > MAX_PALABRAS_REDUCE and len(notas) > 1:
+            print(f"  consolidando {len(notas)} bloques de notas (demasiado largas para REDUCE)")
+            groups = [notas[i:i + 4] for i in range(0, len(notas), 4)]
+            notas = [
+                self._client.chat(
+                    model, system,
+                    "Consolida estas notas fusionando duplicados. Conserva TODOS los datos "
+                    "exactos (cifras, nombres, fechas, decisiones) y no agregues nada nuevo.\n\n"
+                    + "\n\n".join(g),
+                )
+                for g in groups
+            ]
+            joined = "\n\n".join(notas)
+        return joined

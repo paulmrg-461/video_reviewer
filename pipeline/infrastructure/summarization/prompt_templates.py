@@ -8,10 +8,19 @@ most fidelity-sensitive file in this migration step.
 """
 from __future__ import annotations
 
+NO_INFO = "SIN INFORMACIÓN RELEVANTE"
+
+GROUNDING_RULES = (
+    " Usa EXCLUSIVAMENTE el texto proporcionado: si algo no aparece, no lo afirmes ni lo "
+    "deduzcas. Si un dato es ambiguo o la transcripción parece errónea (palabras raras, "
+    "repeticiones), indícalo con [dudoso] en lugar de interpretarlo. Nunca completes cifras, "
+    "nombres ni fechas."
+)
+
 SYS_DEFAULT = (
     "Eres un analista profesional. Revisas transcripciones de video y extraes "
     "información relevante con precisión. No inventas. Conservas nombres, cifras, "
-    "fechas y datos exactos. Respondes en español."
+    "fechas y datos exactos. Respondes en español." + GROUNDING_RULES
 )
 
 
@@ -21,7 +30,7 @@ def build_prompts(instructions: str | None, nombre: str):
             f"Eres un analista profesional. Tu tarea es analizar transcripciones de video "
             f"buscando específicamente lo siguiente: {instructions}. "
             f"Sé preciso, no inventes. Conserva nombres, cifras, fechas y datos exactos. "
-            f"Responde en español."
+            f"Responde en español." + GROUNDING_RULES
         )
         prompt_map = (
             f"Este es un FRAGMENTO de la transcripción. Extrae SOLO información "
@@ -32,7 +41,8 @@ def build_prompts(instructions: str | None, nombre: str):
             f"TEMAS: temas o tópicos mencionados.\n"
             f"DECISIONES: acuerdos o conclusiones.\n"
             f"PENDIENTES: preguntas abiertas o cosas por definir.\n\n"
-            f"No resumas en prosa; usa viñetas cortas. Conserva los datos exactos.\n\n"
+            f"No resumas en prosa; usa viñetas cortas. Conserva los datos exactos. "
+            f"Si el fragmento no contiene nada relevante responde exactamente: {NO_INFO}\n\n"
             f"--- FRAGMENTO ---\n"
             f"{{chunk}}\n"
             f"--- FIN FRAGMENTO ---"
@@ -76,7 +86,8 @@ def build_prompts(instructions: str | None, nombre: str):
             "DECISIONES: acuerdos o conclusiones.\n"
             "ACCIONES: tareas o siguientes pasos mencionados.\n"
             "PENDIENTES: preguntas abiertas o cosas por definir.\n\n"
-            "No resumas en prosa; usa viñetas cortas. Conserva los datos exactos.\n\n"
+            "No resumas en prosa; usa viñetas cortas. Conserva los datos exactos. "
+            f"Si el fragmento no contiene nada relevante responde exactamente: {NO_INFO}\n\n"
             "--- FRAGMENTO ---\n"
             "{chunk}\n"
             "--- FIN FRAGMENTO ---"
