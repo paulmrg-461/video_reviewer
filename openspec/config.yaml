@@ -1,0 +1,44 @@
+schema: spec-driven
+
+context: |
+  Proyecto: Video Reviewer — herramienta LOCAL (un usuario, una GPU) que transcribe y
+  analiza videos/grabaciones de pantalla. Idioma de UI y de specs: español.
+
+  Stack: Python 3.12 (.venv en la raíz, gestionado con uv), FastAPI 0.137 + uvicorn,
+  faster-whisper 1.2.1 (CUDA), Ollama en http://localhost:11434, ffmpeg, httpx 0.28,
+  numpy 2.4, pytest 9. Frontend: UN solo archivo `frontend/index.html` (HTML+CSS+JS puro,
+  sin build, marked.js para markdown), servido por FastAPI.
+  GPU: RTX 5070 12 GB. Whisper, visión y LLM NUNCA cargados a la vez: se rotan.
+  Modelos Ollama instalados: qwen2.5:14b (texto), gemma4:e4b (visión), nomic-embed-text.
+
+  Arquitectura (Clean/Hexagonal), todo bajo `pipeline/`:
+    domain/          entidades y value objects puros (sin I/O)
+    application/     casos de uso + ports (typing.Protocol) por feature
+    infrastructure/  adaptadores (ollama, ffmpeg, whisper, json, filesystem)
+    presentation/    composition_root.py (wiring único) + routes/*.py (FastAPI)
+    tests/           espejo de las capas; fakes escritos a mano, sin mocks de red
+  Persistencia: `sessions.json` (un único SessionsJsonGateway con un asyncio.Lock) +
+  artefactos en `sessions/<sid>/<vid>/` (transcript.txt, transcript.srt, visual_notes.md,
+  summary.md, analysis.md, instructions.txt). Ids: uuid4().hex[:12].
+
+  Comandos:
+    Tests:    .venv/bin/python -m pytest pipeline/tests -q      (desde la raíz del repo)
+    Servidor: ./pipeline/run.sh server                          (puerto 8000)
+    Validar:  openspec validate --all --strict
+
+  Convenciones obligatorias:
+    - TDD: escribir primero los tests (éxito / fallo / seguridad), luego la lógica.
+    - Tests async SIN pytest-asyncio: usar `asyncio.run(...)` dentro de tests síncronos.
+    - Funciones <= 20 líneas, nombres con significado, sin código muerto.
+    - `composition_root.py` NO importa nada de `pipeline/server.py` (import circular).
+    - Un solo `SessionsJsonGateway` en todo el proceso.
+    - Nunca borrar artefactos generados sin confirmación explícita del usuario en la UI.
+    - No renombrar ids/clases del contrato JS del frontend (ver openspec/ROADMAP.md).
+    - Leer openspec/ROADMAP.md antes de aplicar cualquier change.
+
+rules:
+  tasks:
+    - Cada tarea nombra el archivo exacto a tocar y cómo se verifica.
+    - Los tests van antes que la implementación dentro de cada grupo.
+  specs:
+    - Requisitos en español con SHALL/MUST; escenarios con WHEN/THEN.

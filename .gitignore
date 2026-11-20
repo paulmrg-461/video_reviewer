@@ -22,3 +22,7 @@ __pycache__/
 /CLAUDE.md
 /.opencode.json
 .claude/
+# Tutoriales: tomas, intermedios y videos finales (pesado)
+/tutoriales/raw/
+/tutoriales/build/
+/tutoriales/out/
